@@ -48,7 +48,7 @@ tdtu_auto_dubber/
 │   ├── settings_tab.py         # Tab cấu hình API key, lưu settings.json
 │   ├── widgets.py              # Custom UI: GradientProgressBar, LogBox, FileRow, LabeledScale
 │   └── theme.py                # Màu sắc, font chữ chuẩn Dark Theme
-├── tests/                      # [BỘ KIỂM THỬ TỰ ĐỘNG PYTEST - 27 TESTS PASSING 100%]
+├── tests/                      # [BỘ KIỂM THỬ TỰ ĐỘNG PYTEST - 29 TESTS PASSING 100%]
 │   ├── conftest.py             # Fixture sample_video: tạo video 12s bằng FFmpeg lavfi (testsrc + sine)
 │   ├── test_cache.py           # Test cache hit, partial hit, miss on params change, auto regenerate on corrupt
 │   ├── test_cli.py             # Test CLI help và lệnh render end-to-end với ToneTTS
@@ -57,7 +57,7 @@ tdtu_auto_dubber/
 │   ├── test_subtitle_engine.py # Test ToneTTS WordTiming, sinh .ass UTF-8 tag \k, burn .ass lên video fixture
 │   ├── test_subtitles.py       # Test parse SRT, bracket format, CSV, time normalize, split segment
 │   ├── test_timefit.py         # Test co giãn tốc độ, atempo chain
-│   └── test_translator.py      # Test cơ chế fallback model Gemini, bù câu thiếu, quy tắc xưng hô (pronoun rules)
+│   └── test_translator.py      # Test fallback model Gemini, bù câu thiếu, xưng hô, resolve_model theo task profile
 ├── cli.py                      # Điểm vào CLI: python cli.py render ... & python cli.py clear-cache
 ├── run.py                      # Điểm vào GUI: python run.py
 ├── requirements.txt            # Dependencies bắt buộc: pysubs2, requests, google-genai...
@@ -95,16 +95,19 @@ tdtu_auto_dubber/
    - Lưu file tường minh bằng `encoding="utf-8"` (chống lỗi cp1258 trên Windows).
    - Hàm `burn_ass_subtitles()` và tích hợp vào `core/mixer.py` chạy FFmpeg qua thư mục làm việc tương đối để không bị lỗi thoát ký tự `C:\...` trên Windows.
 
-5. **Bộ kiểm thử tự động offline (27/27 tests passed 100%):**
+5. **Bộ kiểm thử tự động offline (29/29 tests passed 100%):**
    - `test_cache.py`: 4 test kiểm chứng cache hit (call_count=0), partial hit khi sửa 1 câu (call_count=1), miss khi đổi params, và tự phục hồi khi cache rỗng/hỏng.
    - `test_subtitle_engine.py`: 3 test kiểm tra ToneTTS sinh WordTiming, sinh file ASS UTF-8 có tag `\k`, và burn phụ đề ASS lên fixture video thoát mã 0.
-   - `test_translator.py`: Test fallback model Gemini, bù câu thiếu, và quy tắc xưng hô `pronoun_rules` được inject vào prompt / payload.
+   - `test_translator.py`: 4 test kiểm tra fallback model Gemini, bù câu thiếu, quy tắc xưng hô `pronoun_rules`, và `resolve_model` tự động chọn model mới nhất theo task profile.
 
-6. **Style Presets & Pronoun Rules (Tùy biến phong cách dịch & xưng hô):**
-   - `core/style_presets.py`: Danh sách phong cách mẫu (`Tự nhiên`, `Review Gen Z`, `Kể chuyện`, `Anime / Tu tiên`, `Giáo dục`) và fallback models Gemini mới nhất (`gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`...).
-   - `core/config.py`: Tích hợp `style_preset`, `style`, `pronoun_rules` vào `DubSettings`.
-   - `core/translator.py` & `core/pipeline.py`: Đưa điều kiện xưng hô (`pronoun_rules`) vào `_system_prompt` và payload gửi sang Gemini API.
-   - `gui/studio_tab.py` & `gui/translator_tab.py`: Bổ sung combobox chọn phong cách mẫu (tự động cập nhật mô tả phong cách) và ô nhập quy tắc xưng hô.
+6. **Style Presets, Task Profiles & Pronoun Rules:**
+   - `core/style_presets.py`: Danh sách phong cách mẫu (`STYLE_PRESETS`), fallback models Gemini và quy tắc lọc model theo mức độ công việc (`TASK_PROFILES`: Nhanh, Cân bằng, Phức tạp).
+   - `core/config.py`: Tích hợp `task_profile`, `style_preset`, `style`, `pronoun_rules` vào `DubSettings`.
+   - `core/translator.py` & `core/pipeline.py`:
+     - Hàm `resolve_model(profile_name, available)` chọn model mới nhất phù hợp quy tắc include/exclude.
+     - Xử lý lỗi 403 / permission / forbidden để tự động chuyển sang model dự phòng khác thay vì dừng lại.
+     - Đưa điều kiện xưng hô (`pronoun_rules`) vào `_system_prompt` và payload gửi sang Gemini API.
+   - `gui/studio_tab.py`: Bổ sung combobox chọn mức độ việc (tự chọn model tương ứng), chọn phong cách mẫu, và ô nhập quy tắc xưng hô.
 
 7. **Xử lý âm thanh Whisper an toàn (Bypass PyAV DLL error trên Windows):**
    - `core/transcriber.py`: `_read_wav_float32(path)` đọc file WAV 16-bit mono 16kHz thành mảng `numpy.float32` [-1, 1] và truyền trực tiếp vào `WhisperModel.transcribe(audio, ...)` giúp loại bỏ hoàn toàn lỗi crash thư viện PyAV trên môi trường Windows.

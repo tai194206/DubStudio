@@ -2,7 +2,7 @@ import json
 
 from core.reporter import Reporter
 from core.subtitles import Segment
-from core.translator import GeminiTranslator
+from core.translator import GeminiTranslator, resolve_model
 
 
 class _NotFound(Exception):
@@ -43,3 +43,16 @@ def test_pronoun_rules_reach_prompt_and_payload():
                  reporter=Reporter(on_log=lambda m, l: None))
     assert "pronoun" in seen["system"].lower()
     assert "Tom gọi Jerry" in seen["user"]
+
+
+def test_resolve_model_picks_newest_matching_rule():
+    available = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview",
+                 "gemini-2.5-pro", "gemini-3.5-flash-image"]
+    assert resolve_model("Nhanh (lời thoại ngắn)", available) == "gemini-3.5-flash-lite"
+    assert resolve_model("Cân bằng (hằng ngày)", available) == "gemini-3.5-flash"
+    assert resolve_model("Phức tạp (kịch bản dài)", available) == "gemini-3.1-pro-preview"
+
+
+def test_resolve_model_none_when_nothing_matches():
+    assert resolve_model("Phức tạp (kịch bản dài)", ["gemini-3.5-flash"]) is None
+

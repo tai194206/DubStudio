@@ -111,6 +111,19 @@ def list_gemini_models(api_key: str) -> List[str]:
     return sorted(set(names), reverse=True)
 
 
+def resolve_model(profile_name: str, available: list) -> str | None:
+    """Chọn model mới nhất khớp quy tắc của chế độ. Trả None nếu không có model nào khớp."""
+    from core.style_presets import TASK_PROFILES
+
+    rule = TASK_PROFILES.get(profile_name)
+    if not rule:
+        return None
+    for name in sorted(available, reverse=True):  # tên có số phiên bản lớn hơn đứng trước
+        if rule["include"] in name and not any(x in name for x in rule["exclude"]):
+            return name
+    return None
+
+
 class GeminiTranslator:
     def __init__(self, api_key: str = "", model: str = DEFAULT_GEMINI_MODELS[0],
                  generate_fn: Optional[GenerateFn] = None, sleep: Callable[[float], None] = time.sleep):
@@ -163,8 +176,9 @@ class GeminiTranslator:
                     last = e
                     code = getattr(e, "code", None)
                     msg = str(e).lower()
-                    if code == 404 or "not found" in msg or "no longer available" in msg or "not supported" in msg:
-                        self.reporter.log(f"⚠️ Model '{model}' không khả dụng, thử model khác...", "warn")
+                    if code in (403, 404) or any(s in msg for s in (
+                            "not found", "no longer available", "not supported", "permission", "forbidden")):
+                        self.reporter.log(f"⚠️ Model '{model}' không dùng được với key này, thử model khác...", "warn")
                         self._dead.add(model)
                         break
                     if code in (429, 500, 502, 503, 504) or "quota" in msg or "overloaded" in msg or "unavailable" in msg:

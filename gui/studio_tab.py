@@ -13,9 +13,9 @@ from core.downloader import is_url
 from core.languages import choices, code_from_choice, get_language
 from core.pipeline import DubbingPipeline
 from core.separator import demucs_available
-from core.style_presets import STYLE_PRESETS
+from core.style_presets import STYLE_PRESETS, TASK_PROFILES
 from core.transcriber import WHISPER_MODELS
-from core.translator import list_gemini_models
+from core.translator import list_gemini_models, resolve_model
 
 from .theme import COLORS, MONO
 from .widgets import GradientProgressBar, LabeledScale, LogBox, row
@@ -63,6 +63,7 @@ class StudioTab(ttk.Frame):
         self.vol_bg = tk.DoubleVar(value=s.bg_volume)
         self.burn = tk.BooleanVar(value=s.burn_captions)
         self.export_srt = tk.BooleanVar(value=s.export_srt)
+        self.profile = tk.StringVar(value=getattr(s, "task_profile", "Cân bằng (hằng ngày)"))
         self.model = tk.StringVar(value=s.gemini_model)
         self.topic = tk.StringVar(value=s.topic)
         self.style_preset = tk.StringVar(value=s.style_preset)
@@ -128,6 +129,12 @@ class StudioTab(ttk.Frame):
 
         c = ttk.Frame(nb, padding=10)
         nb.add(c, text="Dịch (Gemini)")
+        box = ttk.LabelFrame(c, text="Chế độ dịch", style="Card.TLabelframe", padding=8)
+        box.pack(fill="x", pady=4)
+        pick = row(box, "Mức độ việc", lambda p: ttk.Combobox(
+            p, textvariable=self.profile, values=list(TASK_PROFILES), state="readonly"), 13)
+        pick.bind("<<ComboboxSelected>>", self._apply_profile)
+
         box = ttk.LabelFrame(c, text="Model", style="Card.TLabelframe", padding=8)
         box.pack(fill="x", pady=4)
         r = ttk.Frame(box)
@@ -189,6 +196,7 @@ class StudioTab(ttk.Frame):
             ai_volume=round(self.vol_ai.get(), 2), bg_volume=round(self.vol_bg.get(), 2),
             burn_captions=self.burn.get(), export_srt=self.export_srt.get(),
             gemini_model=self.model.get().strip() or DEFAULT_GEMINI_MODELS[0],
+            task_profile=self.profile.get(),
             topic=self.topic.get().strip(),
             style_preset=self.style_preset.get(),
             style=self.style.get().strip() or STYLE_PRESETS.get(self.style_preset.get(), ""),
@@ -203,6 +211,15 @@ class StudioTab(ttk.Frame):
         self.voice_box.config(values=list(lang.edge_voices))
         if not keep_current or not self.voice.get():
             self.voice.set(lang.edge_voice)
+
+    def _apply_profile(self, _event=None):
+        models = list(self.model_box.cget("values") or [])
+        chosen = resolve_model(self.profile.get(), models)
+        if chosen:
+            self.model.set(chosen)
+            self.log.write(f"✓ Chế độ '{self.profile.get()}' → model {chosen}", "ok")
+        else:
+            self.log.write("ℹ️ Chưa có danh sách model. Bấm 'Làm mới' trước rồi chọn lại chế độ.", "warn")
 
     def _refresh_models(self):
         key = self.app.keys().gemini

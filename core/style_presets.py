@@ -18,3 +18,12 @@ FALLBACK_MODELS = [
     "gemini-2.5-flash",
     "gemini-2.5-pro",
 ]
+
+# Mỗi chế độ là một quy tắc tìm model, không phải tên cố định.
+# "include": chuỗi phải có trong tên model; "exclude": các chuỗi không được có.
+TASK_PROFILES = {
+    "Nhanh (lời thoại ngắn)": {"include": "flash-lite", "exclude": ("image", "tts", "live")},
+    "Cân bằng (hằng ngày)": {"include": "flash", "exclude": ("lite", "image", "tts", "live", "preview")},
+    "Phức tạp (kịch bản dài)": {"include": "pro", "exclude": ("image", "tts", "live", "robotics")},
+}
+

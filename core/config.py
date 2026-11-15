@@ -59,6 +59,7 @@ class DubSettings:
     max_segment_seconds: float = 10.0
     # Dịch
     gemini_model: str = DEFAULT_GEMINI_MODELS[0]
+    task_profile: str = "Cân bằng (hằng ngày)"
     topic: str = ""
     style_preset: str = "Tự nhiên"
     style: str = STYLE_PRESETS["Tự nhiên"]
