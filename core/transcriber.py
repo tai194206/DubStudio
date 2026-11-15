@@ -14,17 +14,14 @@ WHISPER_MODELS = ["tiny", "base", "small", "medium", "large-v3", "turbo"]
 
 
 def _read_wav_float32(path):
-    """Đọc WAV 16-bit mono 16kHz thành mảng float32 [-1, 1], bỏ qua PyAV."""
+    """Đọc WAV 16-bit mono 16 kHz thành float32 [-1, 1]. Import numpy lazy để module này nhẹ."""
     import numpy as np
 
     with wave.open(str(path), "rb") as w:
-        if (
-            w.getsampwidth() != 2
-            or w.getnchannels() != 1
-            or w.getframerate() != 16000
-        ):
+        if w.getsampwidth() != 2 or w.getnchannels() != 1 or w.getframerate() != 16000:
             raise DubberError(
-                "Cần WAV 16-bit mono 16kHz để nhận diện giọng nói"
+                "Cần WAV 16-bit, mono, 16 kHz để nhận diện giọng nói "
+                f"(hiện tại: {w.getsampwidth() * 8}-bit, {w.getnchannels()} kênh, {w.getframerate()} Hz)"
             )
         raw = w.readframes(w.getnframes())
     return np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0

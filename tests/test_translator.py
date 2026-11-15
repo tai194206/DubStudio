@@ -9,6 +9,10 @@ class _NotFound(Exception):
     code = 404
 
 
+class _Forbidden(Exception):
+    code = 403
+
+
 def test_recovers_from_dead_model_and_missing_lines():
     calls = []
 
@@ -55,4 +59,37 @@ def test_resolve_model_picks_newest_matching_rule():
 
 def test_resolve_model_none_when_nothing_matches():
     assert resolve_model("Phức tạp (kịch bản dài)", ["gemini-3.5-flash"]) is None
+
+
+def test_403_permission_error_falls_back_to_next_model():
+    calls = []
+
+    def fake(system, user, model):
+        calls.append(model)
+        if model == "gemini-3.5-flash":
+            raise _Forbidden("403 PERMISSION_DENIED: model not allowed for this key")
+        lines = json.loads(user)["lines"]
+        return json.dumps([{"id": l["id"], "text": "ok"} for l in lines])
+
+    tr = GeminiTranslator(model="gemini-3.5-flash", generate_fn=fake, sleep=lambda s: None)
+    segs = [Segment(0, 1, "hello")]
+    out = tr.translate(segs, "en", "vi", reporter=Reporter(on_log=lambda m, l: None))
+
+    assert out[0].text == "ok"
+    assert calls[0] == "gemini-3.5-flash"
+    assert "gemini-3.5-flash" not in calls[1:]  # model bị 403 không bị gọi lại
+    assert tr.model != "gemini-3.5-flash"
+
+
+def test_all_models_forbidden_raises_dubber_error():
+    import pytest
+    from core.errors import DubberError
+
+    def fake(system, user, model):
+        raise _Forbidden("403 forbidden")
+
+    tr = GeminiTranslator(model="gemini-3.5-flash", generate_fn=fake, sleep=lambda s: None)
+    with pytest.raises(DubberError):
+        tr.translate([Segment(0, 1, "hello")], "en", "vi", reporter=Reporter(on_log=lambda m, l: None))
+
 

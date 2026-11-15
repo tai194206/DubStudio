@@ -159,7 +159,10 @@ class GeminiTranslator:
     # ------------------------------------------------------------ gọi model
     def _models_chain(self) -> List[str]:
         chain = [self.model] + [m for m in DEFAULT_GEMINI_MODELS if m != self.model]
-        return [m for m in chain if m not in self._dead] or chain
+        live = [m for m in chain if m not in self._dead]
+        if not live:
+            raise DubberError("Toàn bộ model Gemini đều không khả dụng hoặc bị từ chối truy cập.")
+        return live
 
     def _call(self, system: str, user: str) -> str:
         last: Optional[Exception] = None
@@ -234,12 +237,8 @@ class GeminiTranslator:
                 for i in idx
             ],
         }
-        try:
-            raw = self._call(system, json.dumps(payload, ensure_ascii=False))
-            return {i: t for i, t in _parse_json_map(raw).items() if i in set(idx)}
-        except DubberError as e:
-            self.reporter.log(f"⚠️ Lỗi khi dịch một đợt: {e}", "warn")
-            return {}
+        raw = self._call(system, json.dumps(payload, ensure_ascii=False))
+        return {i: t for i, t in _parse_json_map(raw).items() if i in set(idx)}
 
     def _fallback_one(self, text: str, source_lang: str, target_lang: str) -> str:
         try:
