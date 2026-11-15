@@ -33,7 +33,9 @@ def _system_prompt(src_name: str, tgt_name: str) -> str:
         "4. Keep names, terminology and the way speakers address each other consistent across lines. "
         "Follow the glossary exactly when given.\n"
         "5. Write numbers and symbols the way they should be spoken aloud.\n"
-        "6. `previous_lines` is context only, do not translate it again."
+        "6. `previous_lines` is context only, do not translate it again.\n"
+        "7. If `pronoun_rules` is given, apply it to every line involving those speakers and keep it "
+        "identical across the whole script. Do not switch pronouns between lines.\n"
     )
 
 
@@ -177,8 +179,8 @@ class GeminiTranslator:
 
     # ----------------------------------------------------------------- dịch
     def translate(self, segments: List[Segment], source_lang: str, target_lang: str, *,
-                  topic: str = "", style: str = "", glossary: str = "", batch_size: int = 40,
-                  reporter: Optional[Reporter] = None) -> List[Segment]:
+                  topic: str = "", style: str = "", glossary: str = "", pronoun_rules: str = "",
+                  batch_size: int = 40, reporter: Optional[Reporter] = None) -> List[Segment]:
         self.reporter = reporter or Reporter()
         tgt = get_language(target_lang)
         src_name = "the source language (auto-detect)" if source_lang in ("", "auto") else get_language(source_lang).english
@@ -190,11 +192,11 @@ class GeminiTranslator:
         for b0 in range(0, n, batch_size):
             self.reporter.check_cancel()
             idx = list(range(b0, min(n, b0 + batch_size)))
-            got = self._translate_batch(system, segments, idx, tgt.cps, topic, style, glossary, prev_ctx)
+            got = self._translate_batch(system, segments, idx, tgt.cps, topic, style, glossary, prev_ctx, pronoun_rules)
             missing = [i for i in idx if not got.get(i)]
             if missing:
                 self.reporter.log(f"⚠️ Thiếu {len(missing)} câu, dịch lại riêng...", "warn")
-                got.update(self._translate_batch(system, segments, missing, tgt.cps, topic, style, glossary, prev_ctx))
+                got.update(self._translate_batch(system, segments, missing, tgt.cps, topic, style, glossary, prev_ctx, pronoun_rules))
             for i in idx:
                 text = got.get(i)
                 if not text:
@@ -204,11 +206,13 @@ class GeminiTranslator:
             self.reporter.progress(min(idx[-1] + 1, n) * 100 / n, f"Dịch {min(idx[-1] + 1, n)}/{n} câu")
         return result
 
-    def _translate_batch(self, system, segments, idx, cps, topic, style, glossary, prev_ctx) -> dict:
+    def _translate_batch(self, system, segments, idx, cps, topic, style, glossary, prev_ctx,
+                         pronoun_rules: str = "") -> dict:
         payload = {
             "topic": topic or "(not specified)",
             "style": style or "natural spoken language",
             "glossary": glossary or "(none)",
+            "pronoun_rules": pronoun_rules or "(not specified: use natural pronouns)",
             "previous_lines": prev_ctx,
             "lines": [
                 {"id": i, "text": segments[i].src or segments[i].text,

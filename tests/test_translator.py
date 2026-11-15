@@ -27,3 +27,19 @@ def test_recovers_from_dead_model_and_missing_lines():
     out = tr.translate(segs, "en", "vi", batch_size=3, reporter=Reporter(on_log=lambda m, l: None))
     assert [s.text for s in out] == [f"VI:line {i}" for i in range(5)]
     assert "gemini-3.5-flash" not in calls[1:]  # model chết không bị gọi lại
+
+
+def test_pronoun_rules_reach_prompt_and_payload():
+    seen = {}
+
+    def fake(system, user, model):
+        seen["system"], seen["user"] = system, user
+        lines = json.loads(user)["lines"]
+        return json.dumps([{"id": l["id"], "text": "x"} for l in lines])
+
+    tr = GeminiTranslator(model="gemini-3.5-flash", generate_fn=fake, sleep=lambda s: None)
+    segs = [Segment(0, 1, "hello")]
+    tr.translate(segs, "en", "vi", pronoun_rules="Tom gọi Jerry là 'mày'",
+                 reporter=Reporter(on_log=lambda m, l: None))
+    assert "pronoun" in seen["system"].lower()
+    assert "Tom gọi Jerry" in seen["user"]

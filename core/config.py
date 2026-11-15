@@ -8,6 +8,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv, set_key
 
+from core.style_presets import FALLBACK_MODELS, STYLE_PRESETS
+
 APP_NAME = "DubStudio"
 APP_VERSION = "3.0.0"
 
@@ -20,7 +22,7 @@ DOWNLOAD_DIR = OUTPUT_DIR / "downloads"
 SETTINGS_PATH = ROOT_DIR / "settings.json"
 
 # Tên model có thể đổi bất cứ lúc nào, app tự thử lần lượt các model này nếu model chọn không còn.
-DEFAULT_GEMINI_MODELS = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"]
+DEFAULT_GEMINI_MODELS = FALLBACK_MODELS
 
 
 def load_env() -> None:
@@ -58,7 +60,9 @@ class DubSettings:
     # Dịch
     gemini_model: str = DEFAULT_GEMINI_MODELS[0]
     topic: str = ""
-    style: str = "Tự nhiên, dễ nghe, đúng văn nói"
+    style_preset: str = "Tự nhiên"
+    style: str = STYLE_PRESETS["Tự nhiên"]
+    pronoun_rules: str = ""   # ví dụ: "Tom gọi Jerry là 'mày', Jerry xưng 'tao'"
     glossary: str = ""
     # Giọng đọc
     tts_engine: str = "edge"            # edge | elevenlabs | tone (thử nghiệm, không gọi API)

@@ -88,7 +88,8 @@ class DubbingPipeline:
                 rep.log("⚠️ Chưa có GEMINI_API_KEY → dùng Google Translate miễn phí (kém hiểu ngữ cảnh hơn)", "warn")
                 tr = FreeTranslator()
         return tr.translate(segments, src or "auto", self.s.target_lang, topic=self.s.topic,
-                            style=self.s.style, glossary=self.s.glossary, reporter=rep)
+                            style=self.s.style, glossary=self.s.glossary,
+                            pronoun_rules=self.s.pronoun_rules, reporter=rep)
 
     def prepare_script(self, source: str) -> Tuple[Path, List[Segment]]:
         """Bước 1: tải (nếu là link) → nhận diện giọng → dịch. Trả về (video, kịch bản) để người dùng chỉnh sửa."""

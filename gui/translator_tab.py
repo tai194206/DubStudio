@@ -23,6 +23,7 @@ class TranslatorTab(ttk.Frame):
         self.tgt = tk.StringVar(value=next(c for c in choices() if code_from_choice(c) == s.target_lang))
         self.model = tk.StringVar(value=s.gemini_model)
         self.topic, self.style, self.glossary = tk.StringVar(value=s.topic), tk.StringVar(value=s.style), tk.StringVar(value=s.glossary)
+        self.pronouns = tk.StringVar(value=s.pronoun_rules)
 
         box = ttk.LabelFrame(self, text="1. File kịch bản", style="Card.TLabelframe", padding=8)
         box.pack(fill="x", pady=4)
@@ -38,6 +39,7 @@ class TranslatorTab(ttk.Frame):
         row(box, "Model Gemini", lambda p: ttk.Combobox(p, textvariable=self.model, values=DEFAULT_GEMINI_MODELS))
         row(box, "Chủ đề", lambda p: ttk.Entry(p, textvariable=self.topic))
         row(box, "Phong cách", lambda p: ttk.Entry(p, textvariable=self.style))
+        row(box, "Xưng hô", lambda p: ttk.Entry(p, textvariable=self.pronouns))
         row(box, "Thuật ngữ", lambda p: ttk.Entry(p, textvariable=self.glossary))
 
         bar = ttk.Frame(self)
@@ -62,7 +64,12 @@ class TranslatorTab(ttk.Frame):
             return
         keys = self.app.keys()
         src, tgt = code_from_choice(self.src.get()), code_from_choice(self.tgt.get())
-        opts = dict(topic=self.topic.get(), style=self.style.get(), glossary=self.glossary.get())
+        opts = dict(
+            topic=self.topic.get(),
+            style=self.style.get(),
+            pronoun_rules=self.pronouns.get().strip(),
+            glossary=self.glossary.get(),
+        )
         rep = self.reporter
         self.log.clear()
 

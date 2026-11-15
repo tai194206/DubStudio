@@ -13,6 +13,7 @@ from core.downloader import is_url
 from core.languages import choices, code_from_choice, get_language
 from core.pipeline import DubbingPipeline
 from core.separator import demucs_available
+from core.style_presets import STYLE_PRESETS
 from core.transcriber import WHISPER_MODELS
 from core.translator import list_gemini_models
 
@@ -64,7 +65,9 @@ class StudioTab(ttk.Frame):
         self.export_srt = tk.BooleanVar(value=s.export_srt)
         self.model = tk.StringVar(value=s.gemini_model)
         self.topic = tk.StringVar(value=s.topic)
+        self.style_preset = tk.StringVar(value=s.style_preset)
         self.style = tk.StringVar(value=s.style)
+        self.pronouns = tk.StringVar(value=s.pronoun_rules)
         self.glossary = tk.StringVar(value=s.glossary)
 
         self.source.trace_add("write", lambda *_: setattr(self, "video_path", None))
@@ -137,9 +140,15 @@ class StudioTab(ttk.Frame):
         box = ttk.LabelFrame(c, text="Ngữ cảnh giúp dịch hay hơn", style="Card.TLabelframe", padding=8)
         box.pack(fill="x", pady=4)
         row(box, "Chủ đề video", lambda p: ttk.Entry(p, textvariable=self.topic), 13)
-        row(box, "Phong cách", lambda p: ttk.Entry(p, textvariable=self.style), 13)
+        preset = row(box, "Phong cách mẫu", lambda p: ttk.Combobox(
+            p, textvariable=self.style_preset, values=list(STYLE_PRESETS), state="readonly"), 13)
+        preset.bind("<<ComboboxSelected>>",
+                    lambda e: self.style.set(STYLE_PRESETS.get(self.style_preset.get(), "")))
+        row(box, "Mô tả phong cách", lambda p: ttk.Entry(p, textvariable=self.style), 13)
+        row(box, "Xưng hô", lambda p: ttk.Entry(p, textvariable=self.pronouns), 13)
         row(box, "Thuật ngữ", lambda p: ttk.Entry(p, textvariable=self.glossary), 13)
-        ttk.Label(box, text="Thuật ngữ ví dụ: Jerry=Jerry, Spike=Spike, Yalta=Hội nghị Yalta",
+        ttk.Label(box, text="Xưng hô ví dụ: Narrator xưng 'mình', gọi khán giả là 'các bạn'; "
+                            "Tom gọi Jerry là 'mày', Jerry xưng 'tao'.",
                   style="Muted.TLabel", wraplength=380).pack(anchor="w", pady=(4, 0))
 
     def _build_right(self, parent):
@@ -180,7 +189,11 @@ class StudioTab(ttk.Frame):
             ai_volume=round(self.vol_ai.get(), 2), bg_volume=round(self.vol_bg.get(), 2),
             burn_captions=self.burn.get(), export_srt=self.export_srt.get(),
             gemini_model=self.model.get().strip() or DEFAULT_GEMINI_MODELS[0],
-            topic=self.topic.get().strip(), style=self.style.get().strip(), glossary=self.glossary.get().strip(),
+            topic=self.topic.get().strip(),
+            style_preset=self.style_preset.get(),
+            style=self.style.get().strip() or STYLE_PRESETS.get(self.style_preset.get(), ""),
+            pronoun_rules=self.pronouns.get().strip(),
+            glossary=self.glossary.get().strip(),
         )
         self.app.settings = s
         return s
