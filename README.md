@@ -40,6 +40,7 @@ Kiến trúc tách lớp giữa **lõi xử lý (`core/`)** và **giao diện (`
 - **Pipeline (`core/pipeline.py`):** tích hợp liền mạch cache, đồng bộ WordTiming và xuất video kèm phụ đề karaoke.
 - **CLI (`cli.py`):** hỗ trợ `render` và `clear-cache` (giữ lại `cache/.gitkeep`), ép terminal xuất UTF-8.
 - **GUI (`gui/` & `run.py`):** kiểm chứng import, khởi tạo giao diện `DubStudio`, nút `Mở...` thoáng đẹp.
+- **Nhận diện giọng nói (`core/transcriber.py`):** Đã kiểm chứng chạy thực tế thành công trên Windows; đọc trực tiếp WAV 16-bit mono 16kHz thành mảng `numpy.float32`, lazy import `numpy` và bỏ qua PyAV tránh lỗi trên Windows.
 - **Test tự động:** 26 test (`pytest`) chạy hoàn toàn offline không cần internet hay API key.
 
 ### 🧪 Đã viết mã - Cần kiểm thử thủ công (chưa tự động hóa trong CI)
@@ -77,7 +78,7 @@ tdtu_auto_dubber/
 │   ├── pipeline.py             # [x] Điều phối luồng dubbing tích hợp cache & phụ đề
 │   ├── diagnostics.py          # [ ] Kiểm tra môi trường (chưa thử)
 │   ├── downloader.py           # [ ] Tải video bằng yt-dlp (chưa thử)
-│   ├── transcriber.py          # [ ] faster-whisper (chưa thử)
+│   ├── transcriber.py          # [x] faster-whisper (đã kiểm chứng trên Windows, bypass PyAV)
 │   └── separator.py            # [ ] Demucs, tùy chọn (chưa thử)
 ├── gui/                        # [x] Tkinter, đã kiểm chứng import và chạy thử
 ├── tests/                      # [x] pytest (26 test offline 100%), conftest tạo video mẫu
