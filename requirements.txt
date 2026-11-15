@@ -1,0 +1,11 @@
+# Required
+python-dotenv
+numpy
+requests
+google-genai
+edge-tts
+yt-dlp
+deep-translator
+nest_asyncio
+selenium
+webdriver-manager

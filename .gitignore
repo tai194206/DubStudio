@@ -1,0 +1,25 @@
+# Bí mật & cấu hình cá nhân
+.env
+settings.json
+
+# Môi trường & cache Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Sản phẩm sinh ra khi chạy
+temp_processing/
+output/
+cache/*
+!cache/.gitkeep
+
+# Media & file lớn không đưa lên git
+*.mp4
+*.mkv
+*.mp3
+*.wav
+*.ass
+*.srt
+*.exe

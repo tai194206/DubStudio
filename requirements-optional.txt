@@ -1,0 +1,3 @@
+# Optional - heavier dependencies, install when needed
+faster-whisper    # Speech recognition (transcription from video)
+demucs            # Music and vocal stem separator (requires PyTorch)
