@@ -34,7 +34,7 @@ def _filter_graph(mode: str, has_orig_audio: bool, orig_vol: float, ai_vol: floa
 
 def mix_video(video, ai_track, output, *, mode: str = "duck", original_volume: float = 0.5,
               ai_volume: float = 1.0, bg_stem=None, bg_volume: float = 1.0, srt_path=None,
-              caption_size: int = 18, reporter: Optional[Reporter] = None) -> Path:
+              ass_path=None, caption_size: int = 18, reporter: Optional[Reporter] = None) -> Path:
     reporter = reporter or Reporter()
     if mode not in MIX_MODES:
         raise DubberError(f"Chế độ trộn không hợp lệ: {mode}")
@@ -51,7 +51,11 @@ def mix_video(video, ai_track, output, *, mode: str = "duck", original_volume: f
     tmp = Path(tempfile.mkdtemp(prefix="mix_"))
     try:
         vcodec = ["-c:v", "copy"]
-        if srt_path:  # đốt phụ đề: chạy ffmpeg trong thư mục tạm để tránh lỗi đường dẫn Windows (C:\...)
+        if ass_path:  # ưu tiên đốt phụ đề ASS (karaoke)
+            shutil.copy(ass_path, tmp / "subs.ass")
+            vcodec = ["-vf", "ass=subs.ass",
+                      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"]
+        elif srt_path:  # đốt phụ đề SRT: chạy ffmpeg trong thư mục tạm để tránh lỗi đường dẫn Windows (C:\...)
             shutil.copy(srt_path, tmp / "subs.srt")
             style = (f"FontName=Arial,FontSize={caption_size},Bold=1,PrimaryColour=&H00FFFFFF,"
                      "OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV=30")

@@ -1,16 +1,19 @@
 """Tạo giọng cho từng câu, khớp thời gian rồi ghép thành một track âm thanh dài bằng video."""
 from __future__ import annotations
 
+import shutil
 import wave
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
+from .cache import AudioCache, compute_cache_key
 from .errors import DubberError
 from .ffmpeg_utils import change_speed, to_wav
+from .models import WordTiming, scale_word_timings
 from .reporter import Reporter
 from .subtitles import Segment
 from .timefit import compute_speed, fit_window
@@ -67,17 +70,36 @@ class ClipResult:
     speed: float = 1.0
     overflow: bool = False
     error: Optional[str] = None
+    words: list[WordTiming] = field(default_factory=list)
 
 
 def _render_one(i: int, seg: Segment, segments: Sequence[Segment], engine: TTSEngine,
-                clip_dir: Path, max_speed: float, total_duration: float) -> ClipResult:
+                clip_dir: Path, max_speed: float, total_duration: float,
+                cache: Optional[AudioCache] = None) -> ClipResult:
     text = seg.text.strip()
     if not text:
         return ClipResult(error="Câu rỗng")
     raw = clip_dir / f"raw_{i:04d}{engine.ext}"
     wav = clip_dir / f"clip_{i:04d}.wav"
     try:
-        engine.synthesize(text, raw)
+        words: List[WordTiming] = []
+        voice_id = getattr(engine, "voice_id", getattr(engine, "voice", ""))
+        engine_params = getattr(engine, "params", {})
+
+        cached = None
+        key = None
+        if cache is not None:
+            key = compute_cache_key(engine.name, voice_id, text, engine_params)
+            cached = cache.get(key, engine.ext)
+
+        if cached is not None:
+            cached_audio, words = cached
+            shutil.copyfile(str(cached_audio), str(raw))
+        else:
+            words = engine.synthesize(text, raw) or []
+            if cache is not None and key is not None:
+                cache.put(key, raw, words, engine.ext)
+
         to_wav(raw, wav, SR, 1)
         x = trim_silence(read_wav(wav))
         if x.size == 0:
@@ -91,14 +113,15 @@ def _render_one(i: int, seg: Segment, segments: Sequence[Segment], engine: TTSEn
             change_speed(wav, fast, speed)
             wav = fast
         overflow = duration / speed > window + 0.02
-        return ClipResult(path=wav, speed=speed, overflow=overflow)
+        return ClipResult(path=wav, speed=speed, overflow=overflow, words=words)
     except Exception as e:  # một câu lỗi (hết quota, rớt mạng) → để im lặng, không làm hỏng cả video
         return ClipResult(error=str(e) or type(e).__name__)
 
 
 def render_clips(segments: Sequence[Segment], engine: TTSEngine, work_dir, *, max_speed: float,
                  total_duration: float, workers: int = 3,
-                 reporter: Optional[Reporter] = None) -> Dict[int, ClipResult]:
+                 reporter: Optional[Reporter] = None,
+                 cache: Optional[AudioCache] = None) -> Dict[int, ClipResult]:
     reporter = reporter or Reporter()
     clip_dir = Path(work_dir) / "clips"
     clip_dir.mkdir(parents=True, exist_ok=True)
@@ -106,7 +129,7 @@ def render_clips(segments: Sequence[Segment], engine: TTSEngine, work_dir, *, ma
     total = len(segments)
     pool = ThreadPoolExecutor(max_workers=max(1, workers))
     try:
-        futures = {pool.submit(_render_one, i, s, segments, engine, clip_dir, max_speed, total_duration): i
+        futures = {pool.submit(_render_one, i, s, segments, engine, clip_dir, max_speed, total_duration, cache): i
                    for i, s in enumerate(segments)}
         for done, fut in enumerate(as_completed(futures), 1):
             reporter.check_cancel()
@@ -148,6 +171,12 @@ def build_track(segments: Sequence[Segment], clips: Dict[int, ClipResult], total
             break
         end = min(start + x.size, total)  # không vượt quá độ dài video
         buf[start:end] = x[: end - start]
+
+        # Cập nhật mốc từ WordTiming thực tế sau khi co giãn tốc độ và dịch chuyển theo timeline
+        actual_offset = start / SR
+        if r.words:
+            seg.words = scale_word_timings(r.words, speed=r.speed, offset=actual_offset)
+
         cursor = end
     out_path = Path(out_path)
     write_wav(out_path, buf)

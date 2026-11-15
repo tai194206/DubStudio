@@ -151,8 +151,8 @@ class StudioTab(ttk.Frame):
         self.btn_cancel = ttk.Button(bar, text="⛔ Hủy", style="Danger.TButton", command=self._cancel, state="disabled")
         for b in (self.btn_prepare, self.btn_render, self.btn_auto, self.btn_cancel):
             b.pack(side="left", padx=(0, 6))
-        ttk.Button(bar, text="💾 Lưu", style="Neutral.TButton", command=self.save_script).pack(side="right")
-        ttk.Button(bar, text="📂 Mở kịch bản", style="Neutral.TButton", command=self.load_script).pack(side="right", padx=6)
+        ttk.Button(bar, text="💾 Lưu", width=8, style="Neutral.TButton", command=self.save_script).pack(side="right")
+        ttk.Button(bar, text="📂 Mở...", width=10, style="Neutral.TButton", command=self.load_script).pack(side="right", padx=6)
 
         ttk.Label(parent, text="Kịch bản lồng tiếng (sửa trực tiếp được). Định dạng: [00:00:01.200 -> 00:00:03.400] Nội dung",
                   style="Muted.TLabel").pack(anchor="w")

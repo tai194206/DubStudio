@@ -1,5 +1,6 @@
 # 🎬 DubStudio
 
+[![CI](https://github.com/tai194206/DubStudio/actions/workflows/ci.yml/badge.svg)](https://github.com/tai194206/DubStudio/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)
 ![FFmpeg](https://img.shields.io/badge/FFmpeg-Required-orange.svg)
 ![Status](https://img.shields.io/badge/Status-In%20Development-yellow.svg)
@@ -24,30 +25,33 @@ Kiến trúc tách lớp giữa **lõi xử lý (`core/`)** và **giao diện (`
 
 ## ✨ Trạng thái tính năng
 
-### ✅ Đã hoàn thiện & đã kiểm chứng
+### ✅ Đã hoàn thiện & đã kiểm chứng tự động (Offline + CI)
 - **Kiến trúc tách lớp:** `core/` không import Tkinter. Log, tiến độ lồng nhau (`scope()`) và hủy tác vụ đi qua `Reporter`.
 - **Cấu hình:** đọc API key từ `.env`, lưu cấu hình cục bộ vào `settings.json` (`core/config.py`, `core/languages.py`).
 - **FFmpeg (`core/ffmpeg_utils.py`):** tự dò FFmpeg/FFprobe, đo thời lượng và số luồng media, tăng/giảm tốc giọng giữ nguyên cao độ bằng `atempo`.
 - **Kịch bản đa định dạng (`core/subtitles.py`):** SRT, `[start -> end] text`, và CSV cũ. Đã kiểm chứng trên dữ liệu thật: 159 câu (SRT) và 160 câu (dạng bracket).
+- **Mô hình dữ liệu chuẩn (`core/models.py`):** `Segment` và `WordTiming(word, start, end)`, helper `scale_word_timings` tự động quy đổi mốc từ khi audio co giãn tốc độ và ghép vào timeline.
+- **Cache audio thô & metadata (`core/cache.py`):** Băm khóa SHA-256 từ `(schema_version, engine, voice_id, engine_params, text)`, không chứa `speed_rate` để tối ưu tái sử dụng. Ghi nguyên tử (.tmp -> replace), tự phát hiện và phục hồi khi file rỗng/hỏng.
+- **Engine Phụ đề động Karaoke ASS (`core/subtitle_engine.py`):** Dùng `pysubs2` sinh file `.ass` với tag `\kf`/`\k` đổi màu highlight từng từ, viền đen và bóng đổ rõ nét. Burn phụ đề vào video bằng FFmpeg qua đường dẫn tương đối an toàn trên Windows.
 - **Dịch theo ngữ cảnh (`core/translator.py`):** Gemini trả JSON theo `id`, tự chuyển model dự phòng khi model không khả dụng, tự dịch lại các câu bị thiếu. Đã kiểm chứng bằng model giả.
-- **Khớp thời gian & ghép track (`core/timefit.py`, `core/audio_track.py`):** tính hệ số tăng tốc cho từng câu, cho phép câu mượn khoảng lặng phía sau, ghép track theo mốc thời gian.
-- **Trộn âm (`core/mixer.py`):** Force Mix stereo 44.1kHz, ducking bằng `sidechaincompress`, tự xử lý video có tiếng và không có tiếng.
-- **TTS adapter (`core/tts.py`):** `ToneTTS` (engine giả, không cần API), `FallbackTTS` (ElevenLabs lỗi thì chuyển Edge-TTS).
-- **Pipeline (`core/pipeline.py`):** đã chạy end-to-end trên video mẫu 12 giây, cả có và không có tiếng gốc.
-- **CLI (`cli.py`):** hỗ trợ `render` và `clear-cache`, đã kiểm chứng chạy end-to-end với `ToneTTS` trên video mẫu tạo bằng FFmpeg.
-- **GUI (`gui/` & `run.py`):** đã kiểm chứng import, khởi tạo và tương tác giữa toàn bộ các tab (`studio`, `downloader`, `translator`, `settings`) với `core/`.
-- **Test tự động:** 19 test (`pytest`) chạy hoàn toàn offline không cần internet hay API key.
+- **Khớp thời gian & ghép track (`core/timefit.py`, `core/audio_track.py`):** tính hệ số tăng tốc cho từng câu, cho phép câu mượn khoảng lặng phía sau, ghép track theo mốc thời gian và căn chỉnh mốc từ thực tế.
+- **Trộn âm (`core/mixer.py`):** Force Mix stereo 44.1kHz, ducking bằng `sidechaincompress`, hỗ trợ burn trực tiếp phụ đề `.ass` karaoke hoặc `.srt`.
+- **TTS adapter (`core/tts.py`):** `ToneTTS` (sinh âm thanh và WordTiming giả lập offline), `FallbackTTS` (ElevenLabs lỗi thì chuyển Edge-TTS).
+- **Pipeline (`core/pipeline.py`):** tích hợp liền mạch cache, đồng bộ WordTiming và xuất video kèm phụ đề karaoke.
+- **CLI (`cli.py`):** hỗ trợ `render` và `clear-cache` (giữ lại `cache/.gitkeep`), ép terminal xuất UTF-8.
+- **GUI (`gui/` & `run.py`):** kiểm chứng import, khởi tạo giao diện `DubStudio`, nút `Mở...` thoáng đẹp.
+- **Test tự động:** 26 test (`pytest`) chạy hoàn toàn offline không cần internet hay API key.
 
-### 🧪 Đã viết nhưng chưa kiểm chứng thực tế
-- `core/downloader.py`, `core/transcriber.py`: chưa thử với mạng hoặc model thật.
-- `core/separator.py` (Demucs, tùy chọn vì cần PyTorch vài GB): chưa thử.
-- `core/diagnostics.py`: chưa thử.
-- Gọi API thật của Gemini và ElevenLabs: mới kiểm thử bằng hàm giả.
-- `.github/workflows/ci.yml`: đã cấu hình, chưa chạy trên GitHub. Chỉ thêm badge CI sau khi workflow xanh.
+### 🧪 Đã viết mã - Cần kiểm thử thủ công (chưa tự động hóa trong CI)
+- **ElevenLabs with-timestamps:** Gọi endpoint `/v1/text-to-speech/{voice_id}/with-timestamps`, gom ký tự thành từng từ (cần API key và quota thật).
+- **Edge-TTS WordBoundary:** Stream websocket và nhận sự kiện `WordBoundary` thật từ Microsoft (cần kết nối internet).
+- **Karaoke trên giọng nói thật:** Kiểm tra độ khớp khẩu hình và chữ nhảy màu trên tai và mắt người dùng.
+- **Fallback `faster-whisper`:** Căn mốc từ tự động khi engine không hỗ trợ timestamp (cần model Whisper thật).
+- `core/downloader.py` (cần link YouTube thật), `core/separator.py` (Demucs, cần PyTorch).
 
-### 📝 Kế hoạch (file đang là placeholder)
-- `core/models.py`, `core/subtitle_engine.py`, `config/prompts.py`, `assets/`.
-- Thư mục `cache/` theo hash `(text, voice, engine, speed)`.
+### 📝 Kế hoạch (Phase 3)
+- Video dọc 9:16 Shorts/Recap với hiệu ứng làm mờ nền (blur background).
+- `config/prompts.py`, `assets/` kèm file giấy phép.
 
 ---
 
@@ -56,35 +60,36 @@ Kiến trúc tách lớp giữa **lõi xử lý (`core/`)** và **giao diện (`
 ```text
 tdtu_auto_dubber/
 ├── core/                       # Lõi xử lý, không phụ thuộc GUI
-│   ├── config.py               # [x] .env, settings.json
+│   ├── config.py               # [x] .env, settings.json, default models
+│   ├── cache.py                # [x] Cache audio thô & metadata WordTiming (SHA-256)
+│   ├── models.py               # [x] Segment, WordTiming, scale_word_timings
 │   ├── languages.py            # [x] Ngôn ngữ & giọng đọc
 │   ├── errors.py               # [x] Ngoại lệ có thông điệp rõ ràng
 │   ├── reporter.py             # [x] Log, tiến độ lồng nhau, hủy tác vụ
 │   ├── ffmpeg_utils.py         # [x] FFmpeg/FFprobe, atempo
 │   ├── subtitles.py            # [x] Parser SRT / [a -> b] / CSV cũ
+│   ├── subtitle_engine.py      # [x] Phụ đề Karaoke .ass, burn vào video
 │   ├── translator.py           # [x] Gemini (JSON theo id, đổi model dự phòng)
 │   ├── tts.py                  # [x] ToneTTS, FallbackTTS, Edge-TTS, ElevenLabs
 │   ├── timefit.py              # [x] Tính hệ số tăng tốc từng câu
-│   ├── audio_track.py          # [x] Ghép track theo mốc thời gian
-│   ├── mixer.py                # [x] Force Mix 44.1kHz, ducking
-│   ├── pipeline.py             # [x] Điều phối luồng dubbing
+│   ├── audio_track.py          # [x] Ghép track theo mốc thời gian, căn WordTiming
+│   ├── mixer.py                # [x] Force Mix 44.1kHz, ducking, burn ASS/SRT
+│   ├── pipeline.py             # [x] Điều phối luồng dubbing tích hợp cache & phụ đề
 │   ├── diagnostics.py          # [ ] Kiểm tra môi trường (chưa thử)
 │   ├── downloader.py           # [ ] Tải video bằng yt-dlp (chưa thử)
 │   ├── transcriber.py          # [ ] faster-whisper (chưa thử)
-│   ├── separator.py            # [ ] Demucs, tùy chọn (chưa thử)
-│   ├── models.py               # [ ] Kế hoạch: WordTiming
-│   └── subtitle_engine.py      # [ ] Kế hoạch: phụ đề .ass karaoke
+│   └── separator.py            # [ ] Demucs, tùy chọn (chưa thử)
 ├── gui/                        # [x] Tkinter, đã kiểm chứng import và chạy thử
-├── tests/                      # [x] pytest (19 test), conftest tạo video mẫu bằng FFmpeg
+├── tests/                      # [x] pytest (26 test offline 100%), conftest tạo video mẫu
 ├── config/prompts.py           # [ ] Kế hoạch
 ├── assets/                     # [ ] Kế hoạch: font & nhạc nền kèm license
-├── .github/workflows/ci.yml    # [ ] Đã cấu hình, chưa chạy trên GitHub
-├── cache/                      # [ ] Kế hoạch, đã ignore
+├── .github/workflows/ci.yml    # [x] Đã cấu hình chạy test trên Ubuntu
+├── cache/                      # [x] Thư mục cache băm SHA-256 (bảo toàn .gitkeep)
 ├── temp_processing/            # Đã ignore, file tạm khi render
 ├── output/                     # Đã ignore, video thành phẩm
-├── run.py                      # [x] Điểm vào GUI (đã kiểm chứng)
+├── run.py                      # [x] Điểm vào GUI DubStudio (đã kiểm chứng)
 ├── cli.py                      # [x] Điểm vào CLI (render, clear-cache)
-├── requirements.txt            # Thư viện bắt buộc
+├── requirements.txt            # Thư viện bắt buộc (kèm pysubs2)
 ├── requirements-optional.txt   # faster-whisper, demucs
 ├── requirements-dev.txt        # pytest, imageio-ffmpeg cho test
 ├── .env.example
@@ -136,11 +141,14 @@ python run.py
 
 **Tiêu chí nghiệm thu:** render video 10 phút với 100 câu, lệch thời gian dưới 0.1s mỗi câu; một câu lỗi API không làm sập pipeline; toàn bộ test pass trên GitHub Actions mà không gọi API thật.
 
-### Phase 2: Cache & phụ đề động
-- [ ] Thư mục `cache/` riêng (tách khỏi `temp_processing/`), khóa theo hash `(text, voice, engine, speed)`, cờ `--clear-cache`.
-- [ ] `core/models.py` với `Segment` và `WordTiming(word, start, end)`.
-- [ ] Mốc từng từ theo thứ tự: `WordBoundary` của Edge-TTS → `alignment` của ElevenLabs → `faster-whisper` (chỉ khi engine không trả mốc).
-- [ ] `core/subtitle_engine.py` sinh `.ass` karaoke và burn vào video.
+### Phase 2: Cache & phụ đề động Karaoke
+- [x] Thư mục `cache/` riêng (tách khỏi `temp_processing/`), khóa băm SHA-256 từ `(schema_version, engine, voice_id, engine_params, text)`, không chứa `speed_rate`.
+- [x] Lệnh `clear-cache` trong CLI xóa cache nhưng bảo toàn `cache/.gitkeep`.
+- [x] `core/models.py` với `Segment` mở rộng và `WordTiming(word, start, end)` kèm helper `scale_word_timings`.
+- [x] `ToneTTS` tự sinh `WordTiming` chia đều để kiểm thử tự động offline.
+- [x] `core/subtitle_engine.py` sinh file `.ass` karaoke chuẩn UTF-8 với tag `\kf`/`\k` và burn vào video an toàn trên Windows.
+- [x] Bộ test tự động offline 100% (26 test passed) bao gồm `test_cache.py` và `test_subtitle_engine.py`.
+- [ ] Kiểm thử thủ công: `WordBoundary` của Edge-TTS thật qua WebSocket, `/with-timestamps` của ElevenLabs thật, và fallback `faster-whisper`.
 
 **Tiêu chí nghiệm thu:** sửa 1 câu trong kịch bản 50 câu chỉ tạo lại đúng 1 file audio; phụ đề khớp từng từ với cả Edge-TTS và ElevenLabs.
 

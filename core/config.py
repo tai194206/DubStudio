@@ -8,12 +8,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv, set_key
 
-APP_NAME = "TDTU Auto Dubber"
+APP_NAME = "DubStudio"
 APP_VERSION = "3.0.0"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 ENV_PATH = ROOT_DIR / ".env"
 WORK_ROOT = ROOT_DIR / "temp_processing"
+CACHE_DIR = ROOT_DIR / "cache"
 OUTPUT_DIR = ROOT_DIR / "output"
 DOWNLOAD_DIR = OUTPUT_DIR / "downloads"
 SETTINGS_PATH = ROOT_DIR / "settings.json"

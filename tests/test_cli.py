@@ -15,7 +15,7 @@ def test_cli_help():
         errors="replace",
     )
     assert result.returncode == 0
-    assert "TDTU Auto Dubber" in result.stdout
+    assert "DubStudio" in result.stdout
 
 
 def test_cli_render_tone(sample_video, tmp_path):

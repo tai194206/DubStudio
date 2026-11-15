@@ -9,3 +9,4 @@ deep-translator
 nest_asyncio
 selenium
 webdriver-manager
+pysubs2    # Dynamic ASS karaoke subtitle generator

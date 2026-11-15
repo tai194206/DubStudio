@@ -11,7 +11,9 @@ import argparse
 import sys
 from pathlib import Path
 
+from core.cache import AudioCache
 from core.config import (
+    APP_NAME,
     ROOT_DIR,
     SETTINGS_PATH,
     WORK_ROOT,
@@ -133,20 +135,7 @@ def cmd_clear_cache(args: argparse.Namespace) -> int:
                 print(f"⚠️ Không thể xóa {item}: {e}")
 
     # Dọn dẹp thư mục cache (giữ lại .gitkeep)
-    cache_dir = ROOT_DIR / "cache"
-    if cache_dir.exists():
-        for item in cache_dir.iterdir():
-            if item.name == ".gitkeep":
-                continue
-            try:
-                if item.is_dir():
-                    import shutil
-                    shutil.rmtree(item, ignore_errors=True)
-                else:
-                    item.unlink(missing_ok=True)
-                deleted_count += 1
-            except Exception as e:
-                print(f"⚠️ Không thể xóa {item}: {e}")
+    deleted_count += AudioCache().clear()
 
     print(f"✅ Đã dọn dẹp cache ({deleted_count} mục đã được xóa).")
     return 0
@@ -155,7 +144,7 @@ def cmd_clear_cache(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python cli.py",
-        description="TDTU Auto Dubber - Công cụ tự động hóa lồng tiếng video.",
+        description=f"{APP_NAME} - Công cụ tự động hóa lồng tiếng video.",
     )
     subparsers = parser.add_subparsers(dest="command", help="Lệnh cần thực thi")
 

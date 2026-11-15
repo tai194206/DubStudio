@@ -11,12 +11,14 @@ from typing import List, Optional, Tuple
 
 from . import subtitles as sub
 from .audio_track import build_track, render_clips
+from .cache import AudioCache
 from .config import DOWNLOAD_DIR, OUTPUT_DIR, WORK_ROOT, DubSettings, Keys
 from .downloader import download_video, is_url
 from .errors import DubberError, MissingDependency
 from .ffmpeg_utils import probe
 from .mixer import mix_video
 from .reporter import Reporter
+from .subtitle_engine import generate_karaoke_ass
 from .subtitles import Segment
 from .transcriber import transcribe
 from .translator import FreeTranslator, GeminiTranslator
@@ -25,13 +27,15 @@ from .tts import TTSEngine, make_engine
 
 class DubbingPipeline:
     def __init__(self, settings: DubSettings, keys: Optional[Keys] = None, reporter: Optional[Reporter] = None,
-                 *, tts_engine: Optional[TTSEngine] = None, translator=None, work_root: Optional[Path] = None):
+                 *, tts_engine: Optional[TTSEngine] = None, translator=None, work_root: Optional[Path] = None,
+                 cache: Optional[AudioCache] = None):
         self.s = settings
         self.keys = keys or Keys.from_env()
         self.rep = reporter or Reporter()
         self._engine = tts_engine
         self._translator = translator
         self.work_root = Path(work_root) if work_root else WORK_ROOT
+        self.cache = cache or AudioCache()
         self.detected_lang: Optional[str] = None
         self._workdir: Optional[Path] = None
 
@@ -112,7 +116,7 @@ class DubbingPipeline:
             on_fallback=lambda name, e: self.rep.log(f"⚠️ {name} lỗi ({e}) → chuyển engine dự phòng", "warn"))
 
         clips = render_clips(segments, engine, work, max_speed=self.s.max_speed, total_duration=info.duration,
-                             workers=self.s.tts_workers, reporter=self.rep.scope(0, 70))
+                             workers=self.s.tts_workers, reporter=self.rep.scope(0, 70), cache=self.cache)
         self.rep.check_cancel()
         track = build_track(segments, clips, info.duration, work / "ai_track.wav")
         self.rep.progress(72, "Đã ghép track giọng AI")
@@ -128,19 +132,28 @@ class DubbingPipeline:
         self.rep.check_cancel()
 
         srt_for_burn = None
-        if self.s.export_srt or self.s.burn_captions:
-            srt_text = sub.format_srt(segments)
-            if self.s.export_srt:
-                output.parent.mkdir(parents=True, exist_ok=True)
-                output.with_suffix(".srt").write_text(srt_text, encoding="utf-8")
-            if self.s.burn_captions:
+        ass_for_burn = None
+        has_word_timing = any(len(s.words) > 0 for s in segments)
+
+        if self.s.burn_captions:
+            if has_word_timing:
+                ass_for_burn = work / "captions.ass"
+                generate_karaoke_ass(segments, ass_for_burn, font_size=self.s.caption_size)
+            else:
                 srt_for_burn = work / "captions.srt"
-                srt_for_burn.write_text(srt_text, encoding="utf-8")
+                srt_for_burn.write_text(sub.format_srt(segments), encoding="utf-8")
+
+        if self.s.export_srt:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.with_suffix(".srt").write_text(sub.format_srt(segments), encoding="utf-8")
+            if has_word_timing:
+                generate_karaoke_ass(segments, output.with_suffix(".ass"), font_size=self.s.caption_size)
 
         self.rep.progress(86, "Đang trộn âm thanh và xuất video...")
         mix_video(video, track, output, mode=mode, original_volume=self.s.original_volume,
                   ai_volume=self.s.ai_volume, bg_stem=bg_stem, bg_volume=self.s.bg_volume,
-                  srt_path=srt_for_burn, caption_size=self.s.caption_size, reporter=self.rep)
+                  srt_path=srt_for_burn, ass_path=ass_for_burn, caption_size=self.s.caption_size,
+                  reporter=self.rep)
         self.rep.progress(100, "Hoàn tất!")
         return output
 

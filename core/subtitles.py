@@ -13,16 +13,7 @@ from dataclasses import asdict, dataclass
 from typing import Iterable, List
 
 
-@dataclass
-class Segment:
-    start: float
-    end: float
-    text: str          # nội dung dùng để lồng tiếng (bản dịch)
-    src: str = ""      # lời gốc (nếu có)
-
-    @property
-    def duration(self) -> float:
-        return self.end - self.start
+from .models import Segment, WordTiming
 
 
 # ---------------------------------------------------------------- thời gian
