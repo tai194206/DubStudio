@@ -70,7 +70,7 @@ class DubSettings:
     edge_voice: str = ""                # trống = giọng mặc định của ngôn ngữ đích
     elevenlabs_voice_id: str = ""
     elevenlabs_model: str = "eleven_multilingual_v2"
-    tts_workers: int = 3
+    tts_workers: int = 1
     max_speed: float = 1.6              # tăng tốc tối đa khi câu đọc dài hơn khung thời gian
     # Trộn âm
     mix_mode: str = "duck"              # simple | duck | stems

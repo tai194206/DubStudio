@@ -27,7 +27,7 @@ Kiến trúc tách lớp giữa **lõi xử lý (`core/`)** và **giao diện (`
 
 ### ✅ Đã hoàn thiện & đã kiểm chứng tự động (Offline + CI)
 - **Kiến trúc tách lớp:** `core/` không import Tkinter. Log, tiến độ lồng nhau (`scope()`) và hủy tác vụ đi qua `Reporter`.
-### ✅ Đã kiểm chứng tự động (100% Offline - 35 tests passing)
+### ✅ Đã kiểm chứng tự động (100% Offline - 38 tests passing)
 - **Cấu hình & Môi trường:** Đọc API key từ `.env`, lưu cấu hình vào `settings.json` (`core/config.py`, `core/languages.py`).
 - **FFmpeg (`core/ffmpeg_utils.py`):** Tự dò binary, probe metadata thời lượng/luồng, điều chỉnh tốc độ giọng `atempo` giữ nguyên cao độ.
 - **Kịch bản đa định dạng (`core/subtitles.py`):** Parser SRT, `[start -> end] text`, và CSV cũ.
@@ -89,7 +89,7 @@ tdtu_auto_dubber/
 │   ├── transcriber.py          # [x] faster-whisper (đã kiểm chứng trên Windows, bypass PyAV)
 │   └── separator.py            # [ ] Demucs, tùy chọn (chưa thử)
 ├── gui/                        # [x] Tkinter, đã kiểm chứng import và chạy thử
-├── tests/                      # [x] pytest (35 test offline 100%), conftest tạo video mẫu
+├── tests/                      # [x] pytest (38 test offline 100%), conftest tạo video mẫu
 ├── config/prompts.py           # [ ] Kế hoạch
 ├── assets/                     # [ ] Kế hoạch: font & nhạc nền kèm license
 ├── .github/workflows/ci.yml    # [x] Đã cấu hình chạy test trên Ubuntu

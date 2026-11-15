@@ -36,15 +36,22 @@ class TTSEngine(ABC):
         ...
 
 
-def _retry(fn, tries: int = 3, delay: float = 1.5):
+RETRYABLE_MARKERS = ("no audio was received", "timeout", "connection", "503", "429")
+
+
+def _retry(fn, tries: int = 5, base_delay: float = 2.0):
+    """Thử lại khi lỗi tạm thời: backoff 2s, 4s, 8s, 16s. Lỗi khác thì ném ngay."""
     last = None
     for k in range(tries):
         try:
             return fn()
         except Exception as e:
             last = e
-            if k < tries - 1:
-                time.sleep(delay * (k + 1))
+            msg = str(e).lower()
+            transient = any(m in msg for m in RETRYABLE_MARKERS)
+            if not transient or k == tries - 1:
+                break
+            time.sleep(base_delay * (2 ** k))
     raise TTSError(str(last) or type(last).__name__) from last
 
 
@@ -72,6 +79,7 @@ class EdgeTTS(TTSEngine):
         except ImportError as e:
             raise MissingDependency("Thiếu edge-tts. Chạy: pip install edge-tts") from e
 
+        time.sleep(0.3)
         words: List[WordTiming] = []
         audio_chunks: List[bytes] = []
 

@@ -48,7 +48,7 @@ tdtu_auto_dubber/
 │   ├── settings_tab.py         # Tab cấu hình API key, lưu settings.json
 │   ├── widgets.py              # Custom UI: GradientProgressBar, LogBox, FileRow, LabeledScale
 │   └── theme.py                # Màu sắc, font chữ chuẩn Dark Theme
-├── tests/                      # [BỘ KIỂM THỬ TỰ ĐỘNG PYTEST - 35 TESTS PASSING 100%]
+├── tests/                      # [BỘ KIỂM THỬ TỰ ĐỘNG PYTEST - 38 TESTS PASSING 100%]
 │   ├── conftest.py             # Fixture sample_video: tạo video 12s bằng FFmpeg lavfi (testsrc + sine)
 │   ├── test_cache.py           # Test cache hit, partial hit, miss on params change, auto regenerate on corrupt
 │   ├── test_cli.py             # Test CLI help và lệnh render end-to-end với ToneTTS
@@ -58,7 +58,8 @@ tdtu_auto_dubber/
 │   ├── test_subtitles.py       # Test parse SRT, bracket format, CSV, time normalize, split segment
 │   ├── test_timefit.py         # Test co giãn tốc độ, atempo chain
 │   ├── test_transcriber.py     # Test đọc WAV 16kHz mono float32 và kiểm tra lỗi định dạng âm thanh
-│   └── test_translator.py      # Test fallback model 404/403, báo lỗi khi hết model, xưng hô, resolve_model
+│   ├── test_translator.py      # Test fallback model 404/403, báo lỗi khi hết model, xưng hô, resolve_model
+│   └── test_tts.py             # Test cơ chế backoff retry và lọc lỗi tạm thời (RETRYABLE_MARKERS)
 ├── cli.py                      # Điểm vào CLI: python cli.py render ... & python cli.py clear-cache
 ├── run.py                      # Điểm vào GUI: python run.py
 ├── requirements.txt            # Dependencies bắt buộc: pysubs2, requests, google-genai, numpy...
@@ -157,3 +158,8 @@ tdtu_auto_dubber/
 5. **Vì sao burn phụ đề ASS dùng đường dẫn tương đối trong `core/mixer.py`:**
    - Filter `ass=filename` của FFmpeg trên Windows bị lỗi cú pháp khi đường dẫn chứa dấu hai chấm của ổ đĩa (ví dụ: `C:\path\to\sub.ass` bị FFmpeg parse thành protocol hoặc escape sai).
    - Đặt working directory của tiến trình FFmpeg tại thư mục chứa file và chỉ truyền tên file tương đối `ass=sub.ass` giúp loại bỏ hoàn toàn lỗi này trên cả Windows và Ubuntu CI.
+
+6. **Vì sao mặc định `tts_workers = 1` và thêm backoff retry cho Edge-TTS (`core/tts.py`):**
+   - Edge-TTS là dịch vụ WebSocket miễn phí của Microsoft. Khi bắn đa luồng đồng thời hoặc gửi dồn dập hàng trăm câu (như kịch bản 300–400 câu), server Microsoft rất dễ trả về `No audio was received`, `Connection reset`, `503` hoặc `429`.
+   - Giảm `tts_workers = 1` giúp gọi tuần tự ổn định, thêm `time.sleep(0.3)` giãn cách giữa các câu tránh bị chặn IP, và cơ chế `_retry` lũy thừa 2s, 4s, 8s, 16s với `RETRYABLE_MARKERS` giúp vượt qua các thời điểm mạng chập chờn mà không làm đứt đoạn pipeline.
+   - Nhờ hệ thống cache audio thô (`AudioCache`), khi bấm lại "② Lồng tiếng & xuất video", toàn bộ các câu đã render thành công trước đó sẽ được lấy lại ngay lập tức (cache hit), chỉ những câu lỗi mới được tạo lại.
