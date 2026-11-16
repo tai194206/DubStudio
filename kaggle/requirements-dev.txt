@@ -1,0 +1,4 @@
+# Dependencies to run the offline tests (no GPU, no API key, no internet needed)
+pytest
+google-genai
+# FFmpeg must be installed on the system (apt install ffmpeg / winget install ffmpeg)

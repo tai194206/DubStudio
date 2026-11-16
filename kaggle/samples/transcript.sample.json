@@ -1,0 +1,657 @@
+{
+  "schema": "dubstudio.transcript/1",
+  "generator": "dubkaggle 1.0.0",
+  "source": {
+    "file": "vi_du_minh_hoa.mp4",
+    "duration": 42.0,
+    "language": "zh",
+    "language_probability": 0.99
+  },
+  "settings": {
+    "language": "zh",
+    "model_size": "large-v3",
+    "device": "auto",
+    "compute_type": "auto",
+    "beam_size": 5,
+    "hotwords": "",
+    "initial_prompt": "",
+    "vad_filter": true,
+    "vad_min_silence_ms": 500,
+    "condition_on_previous_text": false,
+    "normalize_audio": true,
+    "separate_vocals": false,
+    "drop_hallucinations": true,
+    "min_seg_seconds": 0.6,
+    "merge_gap": 0.35,
+    "max_seg_seconds": 8.0,
+    "max_chars": 0,
+    "recheck_gaps": true,
+    "gap_recheck_min": 4.0,
+    "gap_warn": 6.0,
+    "low_logprob": -1.0,
+    "no_speech_flag": 0.5,
+    "repetition_ratio": 2.4
+  },
+  "segments": [
+    {
+      "id": 1,
+      "start": 0.8,
+      "end": 3.6,
+      "text": "很久很久以前，有一座安静的小镇。",
+      "words": [
+        {
+          "word": "很",
+          "start": 0.8,
+          "end": 0.975,
+          "prob": 0.95
+        },
+        {
+          "word": "久",
+          "start": 0.975,
+          "end": 1.15,
+          "prob": 0.95
+        },
+        {
+          "word": "很",
+          "start": 1.15,
+          "end": 1.325,
+          "prob": 0.95
+        },
+        {
+          "word": "久",
+          "start": 1.325,
+          "end": 1.5,
+          "prob": 0.95
+        },
+        {
+          "word": "以",
+          "start": 1.5,
+          "end": 1.675,
+          "prob": 0.95
+        },
+        {
+          "word": "前",
+          "start": 1.675,
+          "end": 1.85,
+          "prob": 0.95
+        },
+        {
+          "word": "，",
+          "start": 1.85,
+          "end": 2.025,
+          "prob": 0.95
+        },
+        {
+          "word": "有",
+          "start": 2.025,
+          "end": 2.2,
+          "prob": 0.95
+        },
+        {
+          "word": "一",
+          "start": 2.2,
+          "end": 2.375,
+          "prob": 0.95
+        },
+        {
+          "word": "座",
+          "start": 2.375,
+          "end": 2.55,
+          "prob": 0.95
+        },
+        {
+          "word": "安",
+          "start": 2.55,
+          "end": 2.725,
+          "prob": 0.95
+        },
+        {
+          "word": "静",
+          "start": 2.725,
+          "end": 2.9,
+          "prob": 0.95
+        },
+        {
+          "word": "的",
+          "start": 2.9,
+          "end": 3.075,
+          "prob": 0.95
+        },
+        {
+          "word": "小",
+          "start": 3.075,
+          "end": 3.25,
+          "prob": 0.95
+        },
+        {
+          "word": "镇",
+          "start": 3.25,
+          "end": 3.425,
+          "prob": 0.95
+        },
+        {
+          "word": "。",
+          "start": 3.425,
+          "end": 3.6,
+          "prob": 0.95
+        }
+      ],
+      "flags": [],
+      "avg_logprob": -0.21,
+      "no_speech_prob": 0.02,
+      "compression_ratio": 1.1
+    },
+    {
+      "id": 2,
+      "start": 3.9,
+      "end": 7.2,
+      "text": "小镇的中央有一座老旧的图书馆。",
+      "words": [
+        {
+          "word": "小",
+          "start": 3.9,
+          "end": 4.12,
+          "prob": 0.95
+        },
+        {
+          "word": "镇",
+          "start": 4.12,
+          "end": 4.34,
+          "prob": 0.95
+        },
+        {
+          "word": "的",
+          "start": 4.34,
+          "end": 4.56,
+          "prob": 0.95
+        },
+        {
+          "word": "中",
+          "start": 4.56,
+          "end": 4.78,
+          "prob": 0.95
+        },
+        {
+          "word": "央",
+          "start": 4.78,
+          "end": 5.0,
+          "prob": 0.95
+        },
+        {
+          "word": "有",
+          "start": 5.0,
+          "end": 5.22,
+          "prob": 0.95
+        },
+        {
+          "word": "一",
+          "start": 5.22,
+          "end": 5.44,
+          "prob": 0.95
+        },
+        {
+          "word": "座",
+          "start": 5.44,
+          "end": 5.66,
+          "prob": 0.95
+        },
+        {
+          "word": "老",
+          "start": 5.66,
+          "end": 5.88,
+          "prob": 0.95
+        },
+        {
+          "word": "旧",
+          "start": 5.88,
+          "end": 6.1,
+          "prob": 0.95
+        },
+        {
+          "word": "的",
+          "start": 6.1,
+          "end": 6.32,
+          "prob": 0.95
+        },
+        {
+          "word": "图",
+          "start": 6.32,
+          "end": 6.54,
+          "prob": 0.95
+        },
+        {
+          "word": "书",
+          "start": 6.54,
+          "end": 6.76,
+          "prob": 0.95
+        },
+        {
+          "word": "馆",
+          "start": 6.76,
+          "end": 6.98,
+          "prob": 0.95
+        },
+        {
+          "word": "。",
+          "start": 6.98,
+          "end": 7.2,
+          "prob": 0.95
+        }
+      ],
+      "flags": [],
+      "avg_logprob": -0.18,
+      "no_speech_prob": 0.02,
+      "compression_ratio": 1.1
+    },
+    {
+      "id": 3,
+      "start": 7.8,
+      "end": 10.5,
+      "text": "管理员是一位白发苍苍的老爷爷。",
+      "words": [
+        {
+          "word": "管",
+          "start": 7.8,
+          "end": 7.98,
+          "prob": 0.95
+        },
+        {
+          "word": "理",
+          "start": 7.98,
+          "end": 8.16,
+          "prob": 0.95
+        },
+        {
+          "word": "员",
+          "start": 8.16,
+          "end": 8.34,
+          "prob": 0.95
+        },
+        {
+          "word": "是",
+          "start": 8.34,
+          "end": 8.52,
+          "prob": 0.95
+        },
+        {
+          "word": "一",
+          "start": 8.52,
+          "end": 8.7,
+          "prob": 0.95
+        },
+        {
+          "word": "位",
+          "start": 8.7,
+          "end": 8.88,
+          "prob": 0.95
+        },
+        {
+          "word": "白",
+          "start": 8.88,
+          "end": 9.06,
+          "prob": 0.95
+        },
+        {
+          "word": "发",
+          "start": 9.06,
+          "end": 9.24,
+          "prob": 0.95
+        },
+        {
+          "word": "苍",
+          "start": 9.24,
+          "end": 9.42,
+          "prob": 0.95
+        },
+        {
+          "word": "苍",
+          "start": 9.42,
+          "end": 9.6,
+          "prob": 0.95
+        },
+        {
+          "word": "的",
+          "start": 9.6,
+          "end": 9.78,
+          "prob": 0.95
+        },
+        {
+          "word": "老",
+          "start": 9.78,
+          "end": 9.96,
+          "prob": 0.95
+        },
+        {
+          "word": "爷",
+          "start": 9.96,
+          "end": 10.14,
+          "prob": 0.95
+        },
+        {
+          "word": "爷",
+          "start": 10.14,
+          "end": 10.32,
+          "prob": 0.95
+        },
+        {
+          "word": "。",
+          "start": 10.32,
+          "end": 10.5,
+          "prob": 0.95
+        }
+      ],
+      "flags": [],
+      "avg_logprob": -0.25,
+      "no_speech_prob": 0.02,
+      "compression_ratio": 1.1
+    },
+    {
+      "id": 4,
+      "start": 11.0,
+      "end": 12.6,
+      "text": "他每天都第一个到。",
+      "words": [
+        {
+          "word": "他",
+          "start": 11.0,
+          "end": 11.178,
+          "prob": 0.95
+        },
+        {
+          "word": "每",
+          "start": 11.178,
+          "end": 11.356,
+          "prob": 0.95
+        },
+        {
+          "word": "天",
+          "start": 11.356,
+          "end": 11.533,
+          "prob": 0.95
+        },
+        {
+          "word": "都",
+          "start": 11.533,
+          "end": 11.711,
+          "prob": 0.95
+        },
+        {
+          "word": "第",
+          "start": 11.711,
+          "end": 11.889,
+          "prob": 0.95
+        },
+        {
+          "word": "一",
+          "start": 11.889,
+          "end": 12.067,
+          "prob": 0.95
+        },
+        {
+          "word": "个",
+          "start": 12.067,
+          "end": 12.244,
+          "prob": 0.95
+        },
+        {
+          "word": "到",
+          "start": 12.244,
+          "end": 12.422,
+          "prob": 0.95
+        },
+        {
+          "word": "。",
+          "start": 12.422,
+          "end": 12.6,
+          "prob": 0.95
+        }
+      ],
+      "flags": [],
+      "avg_logprob": -0.31,
+      "no_speech_prob": 0.02,
+      "compression_ratio": 1.1
+    },
+    {
+      "id": 5,
+      "start": 13.4,
+      "end": 17.0,
+      "text": "孩子们放学后最喜欢来这里。",
+      "words": [
+        {
+          "word": "孩",
+          "start": 13.4,
+          "end": 13.677,
+          "prob": 0.95
+        },
+        {
+          "word": "子",
+          "start": 13.677,
+          "end": 13.954,
+          "prob": 0.95
+        },
+        {
+          "word": "们",
+          "start": 13.954,
+          "end": 14.231,
+          "prob": 0.95
+        },
+        {
+          "word": "放",
+          "start": 14.231,
+          "end": 14.508,
+          "prob": 0.95
+        },
+        {
+          "word": "学",
+          "start": 14.508,
+          "end": 14.785,
+          "prob": 0.95
+        },
+        {
+          "word": "后",
+          "start": 14.785,
+          "end": 15.062,
+          "prob": 0.95
+        },
+        {
+          "word": "最",
+          "start": 15.062,
+          "end": 15.338,
+          "prob": 0.95
+        },
+        {
+          "word": "喜",
+          "start": 15.338,
+          "end": 15.615,
+          "prob": 0.95
+        },
+        {
+          "word": "欢",
+          "start": 15.615,
+          "end": 15.892,
+          "prob": 0.95
+        },
+        {
+          "word": "来",
+          "start": 15.892,
+          "end": 16.169,
+          "prob": 0.95
+        },
+        {
+          "word": "这",
+          "start": 16.169,
+          "end": 16.446,
+          "prob": 0.95
+        },
+        {
+          "word": "里",
+          "start": 16.446,
+          "end": 16.723,
+          "prob": 0.95
+        },
+        {
+          "word": "。",
+          "start": 16.723,
+          "end": 17.0,
+          "prob": 0.95
+        }
+      ],
+      "flags": [],
+      "avg_logprob": -0.19,
+      "no_speech_prob": 0.02,
+      "compression_ratio": 1.1
+    },
+    {
+      "id": 6,
+      "start": 17.5,
+      "end": 21.0,
+      "text": "因为这里有讲不完的故事。",
+      "words": [
+        {
+          "word": "因",
+          "start": 17.5,
+          "end": 17.792,
+          "prob": 0.95
+        },
+        {
+          "word": "为",
+          "start": 17.792,
+          "end": 18.083,
+          "prob": 0.95
+        },
+        {
+          "word": "这",
+          "start": 18.083,
+          "end": 18.375,
+          "prob": 0.95
+        },
+        {
+          "word": "里",
+          "start": 18.375,
+          "end": 18.667,
+          "prob": 0.95
+        },
+        {
+          "word": "有",
+          "start": 18.667,
+          "end": 18.958,
+          "prob": 0.95
+        },
+        {
+          "word": "讲",
+          "start": 18.958,
+          "end": 19.25,
+          "prob": 0.95
+        },
+        {
+          "word": "不",
+          "start": 19.25,
+          "end": 19.542,
+          "prob": 0.95
+        },
+        {
+          "word": "完",
+          "start": 19.542,
+          "end": 19.833,
+          "prob": 0.95
+        },
+        {
+          "word": "的",
+          "start": 19.833,
+          "end": 20.125,
+          "prob": 0.95
+        },
+        {
+          "word": "故",
+          "start": 20.125,
+          "end": 20.417,
+          "prob": 0.95
+        },
+        {
+          "word": "事",
+          "start": 20.417,
+          "end": 20.708,
+          "prob": 0.95
+        },
+        {
+          "word": "。",
+          "start": 20.708,
+          "end": 21.0,
+          "prob": 0.95
+        }
+      ],
+      "flags": [
+        "low_conf"
+      ],
+      "avg_logprob": -1.35,
+      "no_speech_prob": 0.02,
+      "compression_ratio": 1.1
+    },
+    {
+      "id": 7,
+      "start": 33.0,
+      "end": 37.5,
+      "text": "故事，才刚刚开始。",
+      "words": [
+        {
+          "word": "故",
+          "start": 33.0,
+          "end": 33.5,
+          "prob": 0.95
+        },
+        {
+          "word": "事",
+          "start": 33.5,
+          "end": 34.0,
+          "prob": 0.95
+        },
+        {
+          "word": "，",
+          "start": 34.0,
+          "end": 34.5,
+          "prob": 0.95
+        },
+        {
+          "word": "才",
+          "start": 34.5,
+          "end": 35.0,
+          "prob": 0.95
+        },
+        {
+          "word": "刚",
+          "start": 35.0,
+          "end": 35.5,
+          "prob": 0.95
+        },
+        {
+          "word": "刚",
+          "start": 35.5,
+          "end": 36.0,
+          "prob": 0.95
+        },
+        {
+          "word": "开",
+          "start": 36.0,
+          "end": 36.5,
+          "prob": 0.95
+        },
+        {
+          "word": "始",
+          "start": 36.5,
+          "end": 37.0,
+          "prob": 0.95
+        },
+        {
+          "word": "。",
+          "start": 37.0,
+          "end": 37.5,
+          "prob": 0.95
+        }
+      ],
+      "flags": [],
+      "avg_logprob": -0.22,
+      "no_speech_prob": 0.02,
+      "compression_ratio": 1.1
+    }
+  ]
+}
