@@ -1,0 +1,4 @@
+# Story mode dependencies (ASCII only)
+numpy
+edge-tts
+pytest

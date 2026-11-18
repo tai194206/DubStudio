@@ -1,0 +1,22 @@
+{
+  "version": "2.0",
+  "title": "Hành trình tìm đường cứu nước - Bến Nhà Rồng 1911",
+  "aspect_ratio": "9:16",
+  "total_words": 285,
+  "style_prefix": "2D flat vector illustration, OverSimplified historical style, bold black outlines, solid flat colors, vertical 9:16",
+  "character_bible": "Young Vietnamese man in 1911, slim build, short neat black hair, wearing a simple white traditional button shirt and dark trousers",
+  "full_script_for_elevenlabs": "Ngày mồng 5 tháng 6 năm 1911, tại bến cảng Nhà Rồng...",
+  "scenes": [
+    {
+      "id": 1,
+      "speech": "Ngày mồng 5 tháng 6 năm 1911, tại bến cảng Nhà Rồng, một quyết định lịch sử đã được đưa ra.",
+      "source_note": "Cần đối chiếu nguồn trước khi đăng (Bảo tàng Hồ Chí Minh; tàu Amiral Latouche-Tréville).",
+      "asset_type": "flow_video",
+      "image_prompt": "Wide low-angle shot, 2D flat vector illustration, OverSimplified historical style, young Vietnamese man in 1911 wearing a simple white shirt and dark trousers standing at Saigon harbor looking at a massive French steamship, warm morning sunlight, vertical 9:16",
+      "motion_prompt": "Slow camera push-in toward the young man, gentle harbor water ripples, steam rising from the ship chimney.",
+      "ken_burns": "zoom_in",
+      "sfx": "ship_horn",
+      "on_screen_text": "5/6/1911 - BẾN NHÀ RỒNG"
+    }
+  ]
+}

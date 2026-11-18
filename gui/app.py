@@ -18,6 +18,7 @@ from core.reporter import Reporter
 
 from .downloader_tab import DownloaderTab
 from .settings_tab import SettingsTab
+from .story_tab import StoryTab
 from .studio_tab import StudioTab
 from .theme import apply_theme
 from .translator_tab import TranslatorTab
@@ -44,10 +45,12 @@ class App(tk.Tk):
         self.notebook.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
         self.studio = StudioTab(self.notebook, self)
+        self.story_tab = StoryTab(self.notebook, self)
         self.downloader = DownloaderTab(self.notebook, self)
         self.translator = TranslatorTab(self.notebook, self)
         self.settings_tab = SettingsTab(self.notebook, self)
         self.notebook.add(self.studio, text="  🎙️ Dub Studio  ")
+        self.notebook.add(self.story_tab, text="  📱 Story Studio  ")
         self.notebook.add(self.downloader, text="  ⬇️ Tải video  ")
         self.notebook.add(self.translator, text="  🌐 Dịch kịch bản  ")
         self.notebook.add(self.settings_tab, text="  ⚙️ Cài đặt  ")

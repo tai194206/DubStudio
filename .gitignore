@@ -23,3 +23,9 @@ cache/*
 *.ass
 *.srt
 *.exe
+
+# Dữ liệu dự án story mode & tài nguyên sinh ra khi chạy
+story_mode/projects/*/output/
+story_mode/projects/*/scenes/
+story_mode/cache/
+

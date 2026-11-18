@@ -146,14 +146,14 @@ class StudioTab(ttk.Frame):
                   style="Muted.TLabel", wraplength=380).pack(anchor="w", pady=(4, 0))
         box = ttk.LabelFrame(c, text="Ngữ cảnh giúp dịch hay hơn", style="Card.TLabelframe", padding=8)
         box.pack(fill="x", pady=4)
-        row(box, "Chủ đề video", lambda p: ttk.Entry(p, textvariable=self.topic), 13)
+        row(box, "Chủ đề video", lambda p: ttk.Entry(p, textvariable=self.topic), 18)
         preset = row(box, "Phong cách mẫu", lambda p: ttk.Combobox(
-            p, textvariable=self.style_preset, values=list(STYLE_PRESETS), state="readonly"), 13)
+            p, textvariable=self.style_preset, values=list(STYLE_PRESETS), state="readonly"), 18)
         preset.bind("<<ComboboxSelected>>",
                     lambda e: self.style.set(STYLE_PRESETS.get(self.style_preset.get(), "")))
-        row(box, "Mô tả phong cách", lambda p: ttk.Entry(p, textvariable=self.style), 13)
-        row(box, "Xưng hô", lambda p: ttk.Entry(p, textvariable=self.pronouns), 13)
-        row(box, "Thuật ngữ", lambda p: ttk.Entry(p, textvariable=self.glossary), 13)
+        row(box, "Mô tả phong cách", lambda p: ttk.Entry(p, textvariable=self.style), 18)
+        row(box, "Xưng hô", lambda p: ttk.Entry(p, textvariable=self.pronouns), 18)
+        row(box, "Thuật ngữ", lambda p: ttk.Entry(p, textvariable=self.glossary), 18)
         ttk.Label(box, text="Xưng hô ví dụ: Narrator xưng 'mình', gọi khán giả là 'các bạn'; "
                             "Tom gọi Jerry là 'mày', Jerry xưng 'tao'.",
                   style="Muted.TLabel", wraplength=380).pack(anchor="w", pady=(4, 0))
