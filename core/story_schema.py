@@ -1,6 +1,6 @@
-"""Hợp đồng dữ liệu và kiểm tra tính hợp lệ của kịch bản phân cảnh Storyboard (Phase 3 & v2.0).
+"""Hợp đồng dữ liệu và kiểm tra tính hợp lệ của kịch bản phân cảnh Storyboard (Phase 3, v2.0 & v3.0).
 
-Hỗ trợ cả Storyboard v1 và Storyboard v2.0 Hybrid (flow_video + static_image).
+Hỗ trợ cả Storyboard v1, v2.0 Hybrid (flow_video + static_image) và v3.0 Continuous Narrative (beats + locations).
 Tuân thủ nghiêm ngặt nguyên tắc không import GUI / tkinter trong core/.
 """
 from __future__ import annotations
@@ -12,9 +12,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from .errors import DubberError
+from .sfx_engine import SFX_VALID_TAGS
 
 VALID_MOTIONS = {"zoom_in", "zoom_out", "pan_left", "pan_right", "static"}
-VALID_SFX = {"none", "whoosh", "boom", "pop", "typing", "alarm", "ship_horn"}
+VALID_SFX = set(SFX_VALID_TAGS)
 
 DEFAULT_MOTION = "zoom_in"
 DEFAULT_SFX = "none"
@@ -133,6 +134,8 @@ class Storyboard:
     full_script_for_elevenlabs: str = ""
     style_suffix: str = ""
     scenes: list[StoryScene] = field(default_factory=list)
+    beats: list[dict] = field(default_factory=list)
+    locations: dict[str, Any] = field(default_factory=dict)
     bgm: str = ""
 
     def __post_init__(self):
@@ -145,17 +148,84 @@ class Storyboard:
         self.style_suffix = str(self.style_suffix).strip()
         self.bgm = str(self.bgm).strip()
 
-        if not self.scenes or not isinstance(self.scenes, list):
-            raise DubberError("Storyboard thiếu danh sách 'scenes' hoặc danh sách rỗng")
+        if (not self.scenes or not isinstance(self.scenes, list)) and (not self.beats or not isinstance(self.beats, list)):
+            raise DubberError("Storyboard thiếu danh sách 'scenes' hoặc 'beats'")
 
         if self.total_words <= 0:
-            self.total_words = sum(len(sc.speech.split()) for sc in self.scenes)
+            if self.scenes:
+                self.total_words = sum(len(sc.speech.split()) for sc in self.scenes)
+            elif self.beats:
+                self.total_words = sum(
+                    len(str(b.get("text") or b.get("text_anchor") or "").split())
+                    for b in self.beats
+                    if isinstance(b, dict)
+                )
+
+    def resolve_location_filename(self, loc_name: str) -> Optional[str]:
+        """Trích xuất tên file tài nguyên từ bảng locations (hỗ trợ cả str và dict v3)."""
+        if not self.locations or loc_name not in self.locations:
+            return None
+        val = self.locations[loc_name]
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+        if isinstance(val, dict):
+            for k in ("file", "asset", "path", "filename", "image", "video"):
+                v = val.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+        return None
+
+    def ensure_scenes_from_beats(self) -> list[StoryScene]:
+        """Nếu kịch bản v3 chỉ có beats mà chưa có scenes, tự động sinh scenes tương ứng để chạy TTS & phụ đề."""
+        if self.scenes:
+            return self.scenes
+        if not self.beats:
+            return []
+
+        generated: list[StoryScene] = []
+        for idx, b in enumerate(self.beats, start=1):
+            if not isinstance(b, dict):
+                continue
+            b_id = int(b.get("id", idx))
+            speech_txt = str(b.get("text") or b.get("text_anchor") or b.get("speech") or "").strip()
+            if not speech_txt:
+                continue
+
+            loc_name = str(b.get("location", "")).strip()
+            loc_meta = self.locations.get(loc_name, {}) if isinstance(self.locations, dict) else {}
+            asset_type = "static_image"
+            if isinstance(loc_meta, dict) and str(loc_meta.get("asset_type", "")).lower() in ("flow_video", "video", "clip"):
+                asset_type = "flow_video"
+
+            sfx_val = str(b.get("sfx", DEFAULT_SFX)).strip().lower()
+            if sfx_val not in VALID_SFX:
+                sfx_val = DEFAULT_SFX
+
+            generated.append(
+                StoryScene(
+                    id=b_id,
+                    speech=speech_txt,
+                    source_note=str(b.get("fact_check") or b.get("source_note") or ""),
+                    asset_type=asset_type,
+                    sfx=sfx_val,
+                )
+            )
+        self.scenes = generated
+        return self.scenes
 
     def get_full_script(self) -> str:
         """Lấy toàn bộ kịch bản lời đọc dùng cho ElevenLabs /with-timestamps."""
         if self.full_script_for_elevenlabs:
             return self.full_script_for_elevenlabs
-        return " ".join(s.speech for s in self.scenes if s.speech.strip())
+        if self.scenes:
+            return " ".join(s.speech for s in self.scenes if s.speech.strip())
+        if self.beats:
+            return " ".join(
+                str(b.get("text") or b.get("text_anchor") or "").strip()
+                for b in self.beats
+                if isinstance(b, dict) and (b.get("text") or b.get("text_anchor"))
+            )
+        return ""
 
     def to_dict(self) -> dict:
         return {
@@ -169,6 +239,8 @@ class Storyboard:
             "style_suffix": self.style_suffix,
             "bgm": self.bgm,
             "scenes": [s.to_dict() for s in self.scenes],
+            "beats": self.beats,
+            "locations": self.locations,
         }
 
     @classmethod
@@ -177,10 +249,22 @@ class Storyboard:
             raise DubberError("Dữ liệu storyboard phải là JSON object (dict)")
 
         scenes_raw = data.get("scenes")
-        if scenes_raw is None or not isinstance(scenes_raw, list) or len(scenes_raw) == 0:
-            raise DubberError("Storyboard thiếu danh sách 'scenes' hoặc danh sách rỗng")
+        beats_raw = data.get("beats")
 
-        scenes = [StoryScene.from_dict(s) for s in scenes_raw]
+        if (scenes_raw is None or not isinstance(scenes_raw, list) or len(scenes_raw) == 0) and \
+           (beats_raw is None or not isinstance(beats_raw, list) or len(beats_raw) == 0):
+            raise DubberError("Storyboard thiếu danh sách 'scenes' hoặc 'beats'")
+
+        scenes = [StoryScene.from_dict(s) for s in (scenes_raw or [])]
+        beats = list(beats_raw) if isinstance(beats_raw, list) else []
+        locations = dict(data.get("locations", {})) if isinstance(data.get("locations"), dict) else {}
+
+        full_narration = str(
+            data.get("full_script_for_elevenlabs")
+            or data.get("full_narration")
+            or ""
+        ).strip()
+
         total_w = data.get("total_words", 0)
         try:
             total_w = int(total_w)
@@ -194,21 +278,22 @@ class Storyboard:
             total_words=total_w,
             style_prefix=data.get("style_prefix", ""),
             character_bible=data.get("character_bible", ""),
-            full_script_for_elevenlabs=data.get("full_script_for_elevenlabs", ""),
+            full_script_for_elevenlabs=full_narration,
             style_suffix=data.get("style_suffix", ""),
             scenes=scenes,
+            beats=beats,
+            locations=locations,
             bgm=data.get("bgm", ""),
         )
 
 
 def load_storyboard(path_or_data: Union[Path, str, dict]) -> Storyboard:
-    """Tải và thẩm định storyboard từ file path, chuỗi JSON hoặc dict (hỗ trợ cả v1 và v2.0)."""
+    """Tải và thẩm định storyboard từ file path, chuỗi JSON hoặc dict (hỗ trợ v1, v2.0 và v3.0)."""
     if isinstance(path_or_data, dict):
         return Storyboard.from_dict(path_or_data)
 
     target_path = Path(path_or_data)
     if not target_path.is_file():
-        # Nếu path_or_data là chuỗi JSON trực tiếp
         if isinstance(path_or_data, str) and path_or_data.strip().startswith("{"):
             try:
                 data = json.loads(path_or_data)
@@ -218,7 +303,7 @@ def load_storyboard(path_or_data: Union[Path, str, dict]) -> Storyboard:
         raise DubberError(f"Không tìm thấy file storyboard: {path_or_data}")
 
     try:
-        content = target_path.read_text(encoding="utf-8")
+        content = target_path.read_text(encoding="utf-8-sig")
         data = json.loads(content)
     except UnicodeDecodeError as e:
         raise DubberError(f"Không thể đọc file storyboard (yêu cầu UTF-8): {e}") from e

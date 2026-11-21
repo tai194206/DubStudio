@@ -25,9 +25,16 @@ Kiến trúc tách lớp giữa **lõi xử lý (`core/`)** và **giao diện (`
 
 ## ✨ Trạng thái tính năng
 
-### ✅ Đã hoàn thiện & đã kiểm chứng tự động (Offline + CI)
+### 🚀 Nâng cấp mới (Story Studio 9:16 & Pipeline V5.2 — 229 tests PASS)
+- **Whisper Alignment Cache (`core/story_pipeline.py`):** Khi dùng `full_audio.mp3/.wav`, tự căn mốc từng từ bằng `faster-whisper` ở `1.00x` và lưu cache `cache/align_*.json` (`0.01s`), tái sử dụng khi đổi tốc độ hoặc render lại.
+- **Phụ đề CapCut 3 chữ (`highlight_3words`):** Hiển thị tối đa 3 chữ theo cụm và làm sáng chữ đang đọc, ngắt ranh giới từng cảnh sạch sẽ không tràn chữ sang cảnh sau.
+- **Đồng bộ tốc độ đầu ra & BGM `.mp4` (`core/story_pipeline.py`, `gui/story_tab.py`):** Điều chỉnh tốc độ đồng bộ **Video + Giọng + Phụ đề**, hỗ trợ rút nhạc nền từ file `.mp4/.mov/.mkv/.webm` và giữ nguyên nhịp gốc `1.00x` cắt khớp thời lượng video.
+- **Bộ lọc Né quét AI (`core/anti_ai_filter.py`):** Hỗ trợ 3 mức **Nhẹ / Vừa / Mạnh** không hở góc đen, xóa metadata/C2PA, tích hợp **1-pass** trước lớp phụ đề `.ass` trên Tab 3 và có tab riêng **`4. Né quét AI`** cho file `.mp4` hoàn chỉnh.
+- **SFX Engine (`core/sfx_engine.py`):** Hỗ trợ **20 tag SFX điện ảnh V5.2** (kèm `none`), tự tổng hợp fallback sạch bằng NumPy/FFT khi thiếu file WAV, trộn `normalize=0` + EQ tách dải giọng đọc + `alimiter` chống rè và thanh trượt **Âm lượng SFX** (`0%–150%`) trên GUI.
+- **Pipeline V5.2 & Flow Bot Batch (`automation/`, `.agent/`):** Phân hạng ưu tiên tư liệu thật `0_100` → `30_70` → `50_50` → `70_30`, Hook 3 giây đầu, trình kiểm định `validate_storyboard.py` và `flow_bot.py` batch pipelining (xem [docs/V5_QUICKSTART.md](docs/V5_QUICKSTART.md)).
+
+### ✅ Đã hoàn thiện & đã kiểm chứng tự động (Offline + CI — 229 tests PASS)
 - **Kiến trúc tách lớp:** `core/` không import Tkinter. Log, tiến độ lồng nhau (`scope()`) và hủy tác vụ đi qua `Reporter`.
-### ✅ Đã kiểm chứng tự động (100% Offline - 38 tests passing)
 - **Cấu hình & Môi trường:** Đọc API key từ `.env`, lưu cấu hình vào `settings.json` (`core/config.py`, `core/languages.py`).
 - **FFmpeg (`core/ffmpeg_utils.py`):** Tự dò binary, probe metadata thời lượng/luồng, điều chỉnh tốc độ giọng `atempo` giữ nguyên cao độ.
 - **Kịch bản đa định dạng (`core/subtitles.py`):** Parser SRT, `[start -> end] text`, và CSV cũ.

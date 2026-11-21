@@ -1,0 +1,96 @@
+{
+  "cdp_url": "http://127.0.0.1:9222",
+  "flow_url_keyword": "flow.google.com",
+  "flow_url_keywords": [
+    "flow.google.com",
+    "labs.google"
+  ],
+  "image_mode": {
+    "tab_label": "Hình ảnh",
+    "aspect_label": "9:16",
+    "model_label": "Nano Banana Pro",
+    "batch_label": "x1",
+    "expected_credit_text": "0 tín dụng"
+  },
+  "video_mode": {
+    "tab_label": "Video",
+    "submode_label": "Khung hình",
+    "aspect_label": "9:16",
+    "model_label": "Veo 3.1 - Lite",
+    "batch_label": "x1",
+    "expected_credit_text": "10 tín dụng"
+  },
+  "selectors": {
+    "settings_trigger": [
+      "button[aria-label='Điều kiện kích hoạt cài đặt']",
+      "button:has-text('Nano Banana')",
+      "button:has-text('Veo')",
+      "button:has-text('Video')",
+      "button:has-text('9:16')",
+      "button:has-text('16:9')",
+      "button[aria-label*='Cài đặt' i]",
+      "button[aria-label*='Settings' i]"
+    ],
+    "model_dropdown": [
+      "button[aria-label='Chọn nhóm mô hình']",
+      "button[aria-label*='mô hình' i]",
+      "button[aria-label*='model' i]"
+    ],
+    "add_media_button": [
+      "button[aria-label='Thêm thành phần vào ô nhập câu lệnh']",
+      "button[aria-label='Trình đơn thêm nội dung nghe nhìn']"
+    ],
+    "prompt_input": [
+      "[role='textbox'][aria-label='Bạn muốn tạo những gì?']",
+      "[role='textbox'][contenteditable='true']",
+      "[role='textbox']",
+      "textarea[placeholder*='Mô tả' i]",
+      "textarea[placeholder*='Tạo' i]",
+      "textarea[placeholder*='prompt' i]",
+      "textarea",
+      "[contenteditable='true']"
+    ],
+    "file_input": [
+      "input[type='file'][accept*='image']",
+      "input[type='file']"
+    ],
+    "generate_button": [
+      "button[aria-label='Bắt đầu tạo']",
+      "button[type='submit']",
+      "button[aria-label*='Tạo' i]",
+      "button[aria-label*='Gửi' i]",
+      "button[aria-label*='Generate' i]",
+      "button[aria-label*='Send' i]",
+      "button:has-text('Tạo')",
+      "button:has-text('Generate')"
+    ],
+    "download_button": [
+      "button[aria-label*='Tải xuống' i]",
+      "button[aria-label*='Download' i]",
+      "a[download]",
+      "button:has-text('Tải xuống')",
+      "button:has-text('Download')"
+    ],
+    "policy_error_keywords": [
+      "chính sách",
+      "vi phạm",
+      "policy",
+      "violate",
+      "unsafe",
+      "blocked",
+      "không thể tạo",
+      "unable to generate"
+    ]
+  },
+  "timeouts": {
+    "image_timeout_sec": 120,
+    "video_timeout_sec": 360,
+    "delay_between_scenes_sec": 4
+  },
+  "concurrency": {
+    "images": 4,
+    "videos": 3,
+    "submit_gap_sec": 2.5,
+    "placeholder_wait_sec": 12
+  }
+}

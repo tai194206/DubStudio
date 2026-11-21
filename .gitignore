@@ -1,6 +1,7 @@
 # Bí mật & cấu hình cá nhân
 .env
 settings.json
+*.log
 
 # Môi trường & cache Python
 .venv/
@@ -15,17 +16,28 @@ output/
 cache/*
 !cache/.gitkeep
 
-# Media & file lớn không đưa lên git
+# Media & file lớn / nhị phân không đưa lên git
 *.mp4
+*.mov
 *.mkv
+*.avi
+*.webm
 *.mp3
+*.m4a
 *.wav
 *.ass
 *.srt
+*.tmp.*
 *.exe
+*.dll
 
-# Dữ liệu dự án story mode & tài nguyên sinh ra khi chạy
-story_mode/projects/*/output/
-story_mode/projects/*/scenes/
+# Dữ liệu dự án sản xuất & tài nguyên sinh ra khi chạy
+story_mode/projects/
 story_mode/cache/
+
+# --- Automation V5 (Google Flow & Raw Assets) ---
+**/raw_images/
+**/pipeline_state.json
+automation/chrome_profile/
+automation/debug/
 
