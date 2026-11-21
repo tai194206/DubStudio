@@ -27,9 +27,11 @@ import numpy as np
 from pysubs2 import Alignment, Color, SSAEvent, SSAFile, SSAStyle
 
 from .anti_ai_filter import (
+    build_ai_scene_depolish_vf,
     build_anti_ai_audio_graph,
     build_anti_ai_video_filters,
     get_clean_metadata_flags,
+    load_archival_scene_ids,
     normalize_anti_ai_level,
 )
 from .audio_track import SR, fade_edges, read_wav, write_wav
@@ -645,13 +647,23 @@ def _build_video_clip_cmd(
     out_clip: Path,
     *,
     smart_clip_fit: bool = True,
+    extra_vf: str = "",
 ) -> List[str]:
     """Xây dựng lệnh FFmpeg render clip MP4 9:16.
 
     Nếu clip gốc ngắn hơn target_dur không quá 45% (ví dụ clip Flow 5s gặp câu 6.5s),
     tự động kéo giãn nhẹ tốc độ bằng setpts thay vì lặp lại từ đầu gây giật hình.
     """
-    base_vf = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,format=yuv420p"
+    vf_parts = [
+        "scale=1080:1920:force_original_aspect_ratio=increase",
+        "crop=1080:1920",
+        "setsar=1",
+        "fps=30",
+    ]
+    if extra_vf:
+        vf_parts.append(extra_vf)
+    vf_parts.append("format=yuv420p")
+    base_vf = ",".join(vf_parts)
     use_stretch = False
     stretch_ratio = 1.0
 
@@ -742,7 +754,7 @@ def _concat_with_xfade(
     return res.returncode == 0 and out_video.is_file()
 
 
-def _build_zoompan_filter(motion: str, duration: float) -> str:
+def _build_zoompan_filter(motion: str, duration: float, *, extra_vf: str = "") -> str:
     """Xây dựng chuỗi bộ lọc zoompan cho hiệu ứng Ken Burns 9:16 (1080x1920, 30fps)."""
     d = max(1, int(math.ceil(duration * 30)))
     step = 0.15 / max(d, 1)
@@ -778,7 +790,8 @@ def _build_zoompan_filter(motion: str, duration: float) -> str:
             f"d={d}:s=1080x1920:fps=30"
         )
 
-    return f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,{vf_zoom},setsar=1,format=yuv420p"
+    tail = f",{extra_vf}" if extra_vf else ""
+    return f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,{vf_zoom},setsar=1{tail},format=yuv420p"
 
 
 def _norm_vi_token(text: str) -> str:
@@ -1325,6 +1338,35 @@ class StoryPipeline:
         if missing:
             raise DubberError(f"Thiếu tài nguyên cho {len(missing)} cảnh (ID: {missing}) trong thư mục {assets_dir.name}")
         self.rep.log(f"✓ Đã khớp đủ {len(asset_map)} tài nguyên media.", "ok")
+
+        archival_ids: set[int] = set()
+        if anti_ai_active:
+            candidate_dirs: List[Path] = []
+            if isinstance(storyboard_path_or_obj, (Path, str)):
+                sb_p = Path(storyboard_path_or_obj)
+                if sb_p.is_file():
+                    candidate_dirs.append(sb_p.resolve().parent)
+            resolved_assets = assets_dir.resolve()
+            candidate_dirs.extend([resolved_assets.parent, resolved_assets])
+            for pdir in candidate_dirs:
+                archival_ids = load_archival_scene_ids(pdir)
+                if archival_ids:
+                    break
+
+        selective_anti_ai = anti_ai_active and bool(archival_ids)
+        ai_depolish_vf = (
+            build_ai_scene_depolish_vf(eff_anti_ai_level, width=1080, height=1920)
+            if selective_anti_ai
+            else ""
+        )
+        if selective_anti_ai:
+            n_archival = sum(1 for sc in sb.scenes if sc.id in archival_ids)
+            n_ai = len(sb.scenes) - n_archival
+            self.rep.log(
+                f"🛡️ [Anti-AI Selective] Giữ nét gốc {n_archival} cảnh tư liệu thật "
+                f"| Áp lọc khử bóng nhẹ (mức={eff_anti_ai_level}) cho {n_ai} cảnh AI.",
+                "info",
+            )
         self.rep.check_cancel()
 
         # ------------------------------------------------------------- 2. Xử lý Alignment & Nguồn Âm thanh
@@ -1689,10 +1731,20 @@ class StoryPipeline:
                 out_clip = runs_video_dir / f"run_{i:03d}.mp4"
 
                 is_video = asset_file.suffix.lower() in ASSET_VIDEO_EXTS
+                run_has_archival = any(sid in archival_ids for sid in (r.shot_ids or []))
+                run_extra_vf = ai_depolish_vf if (selective_anti_ai and not run_has_archival) else ""
                 if is_video:
-                    cmd = _build_video_clip_cmd(asset_file, render_dur, out_clip, smart_clip_fit=smart_clip_fit)
+                    cmd = _build_video_clip_cmd(
+                        asset_file,
+                        render_dur,
+                        out_clip,
+                        smart_clip_fit=smart_clip_fit,
+                        extra_vf=run_extra_vf,
+                    )
                 else:
                     vf = build_run_filter(r, fps=30)
+                    if run_extra_vf:
+                        vf = f"{vf},{run_extra_vf},format=yuv420p"
                     cmd = [
                         "-loop", "1",
                         "-t", f"{render_dur:.3f}",
@@ -1730,11 +1782,18 @@ class StoryPipeline:
                 out_clip = scenes_video_dir / f"clip_{sc.id:03d}.mp4"
 
                 is_video = (sc.asset_type == "flow_video") or (asset_file.suffix.lower() in ASSET_VIDEO_EXTS)
+                scene_extra_vf = ai_depolish_vf if (selective_anti_ai and sc.id not in archival_ids) else ""
                 if is_video:
-                    cmd = _build_video_clip_cmd(asset_file, render_dur, out_clip, smart_clip_fit=smart_clip_fit)
+                    cmd = _build_video_clip_cmd(
+                        asset_file,
+                        render_dur,
+                        out_clip,
+                        smart_clip_fit=smart_clip_fit,
+                        extra_vf=scene_extra_vf,
+                    )
                 else:
                     effective_motion = sc.ken_burns or sc.motion
-                    vf = _build_zoompan_filter(effective_motion, render_dur)
+                    vf = _build_zoompan_filter(effective_motion, render_dur, extra_vf=scene_extra_vf)
                     cmd = [
                         "-loop", "1",
                         "-t", f"{render_dur:.3f}",
@@ -1899,6 +1958,7 @@ class StoryPipeline:
             vcodec_args = ["-c:v", "libx264", "-profile:v", "high", "-crf", "24", "-preset", "medium", "-pix_fmt", "yuv420p"]
 
         metadata_args = get_clean_metadata_flags() if anti_ai_active else ["-movflags", "+faststart"]
+        apply_global_anti_ai = anti_ai_active and not selective_anti_ai
         bgm_fade_in_d = min(1.0, max(0.1, total_duration * 0.2))
         bgm_fade_out_d = min(1.8, max(0.2, total_duration * 0.35))
         bgm_fade_out_st = max(0.0, total_duration - bgm_fade_out_d)
@@ -1915,12 +1975,12 @@ class StoryPipeline:
                 film_grain=bool(anti_ai_grain),
                 seed=sb.title,
             )
-            if anti_ai_active
+            if apply_global_anti_ai
             else []
         )
-        if anti_ai_active:
+        if apply_global_anti_ai:
             self.rep.log(
-                f"🛡️ Áp bộ lọc Né quét AI 1-pass (mức={eff_anti_ai_level} | grain={'bật' if anti_ai_grain else 'tắt'}) trước lớp phụ đề ASS.",
+                f"🛡️ Áp bộ lọc Né quét AI 1-pass toàn cục (mức={eff_anti_ai_level} | grain={'bật' if anti_ai_grain else 'tắt'}) trước lớp phụ đề ASS.",
                 "info",
             )
 
@@ -1947,7 +2007,10 @@ class StoryPipeline:
             if anti_ai_vf:
                 vf_chain.extend(anti_ai_vf)
             if cinematic_grade:
-                if anti_ai_active and anti_ai_grain and eff_anti_ai_level in ("medium", "strong"):
+                if selective_anti_ai:
+                    # Bảo toàn độ nét & 4 góc tư liệu thật (tránh noise/vignette toàn cục)
+                    vf_chain.append("colorbalance=rs=0.03:gs=0.005:bs=-0.03")
+                elif apply_global_anti_ai and anti_ai_grain and eff_anti_ai_level in ("medium", "strong"):
                     # Anti-AI đã phủ hạt phim & tối góc dịu → chỉ thêm sắc ấm điện ảnh tránh tối góc kép
                     vf_chain.append("colorbalance=rs=0.05:gs=0.01:bs=-0.05")
                 else:
@@ -1969,8 +2032,8 @@ class StoryPipeline:
             post_parts.append("alimiter=limit=0.95:attack=5:release=50:level=0")
             master_post = ",".join(post_parts)
 
-            mix_out_label = "[_amix_pre]" if anti_ai_active else "[aout]"
-            direct_post = "" if anti_ai_active else f",{master_post}"
+            mix_out_label = "[_amix_pre]" if apply_global_anti_ai else "[aout]"
+            direct_post = "" if apply_global_anti_ai else f",{master_post}"
             sfx_bus = (
                 f"[{sfx_idx}:a]{_FMT},"
                 f"equalizer=f=100:t=q:w=1.0:g=3.5,"
@@ -2004,7 +2067,7 @@ class StoryPipeline:
             else:
                 fc_parts.append(f"[1:a]{_FMT}{direct_post}{mix_out_label}")
 
-            if anti_ai_active:
+            if apply_global_anti_ai:
                 fc_parts.append(
                     build_anti_ai_audio_graph(
                         "[_amix_pre]",

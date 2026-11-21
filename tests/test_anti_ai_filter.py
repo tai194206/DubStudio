@@ -9,9 +9,11 @@ import pytest
 from PIL import Image
 
 from core.anti_ai_filter import (
+    build_ai_scene_depolish_vf,
     build_anti_ai_audio_filters,
     build_anti_ai_video_filters,
     get_clean_metadata_flags,
+    load_archival_scene_ids,
     normalize_anti_ai_level,
     probe_video_details,
     process_standalone_video,
@@ -287,3 +289,73 @@ def test_story_pipeline_anti_ai_before_ass_and_bool_backward_compat(tmp_path, mo
     assert out_bool_false.is_file()
     assert "rotate=" not in captured_filters[-1]
     assert "anoisesrc=" not in captured_filters[-1]
+
+
+def test_load_archival_scene_ids(tmp_path):
+    """Đọc chính xác tập scene_id từ định dạng archive_sources.json và trả set() khi thiếu/rỗng."""
+    assert load_archival_scene_ids(tmp_path) == set()
+    assert load_archival_scene_ids(None) == set()
+
+    # 1. Định dạng chuẩn fetch_archive_media.py (dict 'assets' theo khóa 001/005)
+    ep_std = tmp_path / "ep_std"
+    ep_std.mkdir()
+    (ep_std / "archive_sources.json").write_text(
+        json.dumps(
+            {
+                "episode": "Tap_04",
+                "assets": {
+                    "001": {"scene_id": 1, "provider": "wikimedia_commons"},
+                    "005": {"scene_id": 5, "provider": "internet_archive"},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    assert load_archival_scene_ids(ep_std) == {1, 5}
+
+    # 2. Định dạng list các bản ghi có 'scene' hoặc 'scene_id'
+    ep_list = tmp_path / "ep_list"
+    ep_list.mkdir()
+    (ep_list / "archive_sources.json").write_text(
+        json.dumps([{"scene": 2}, {"scene_id": 7}, {"id": "11"}]),
+        encoding="utf-8",
+    )
+    assert load_archival_scene_ids(ep_list) == {2, 7, 11}
+
+    # 3. File rỗng hoặc JSON rỗng assets trả set() an toàn
+    ep_empty = tmp_path / "ep_empty"
+    ep_empty.mkdir()
+    (ep_empty / "archive_sources.json").write_text("", encoding="utf-8")
+    assert load_archival_scene_ids(ep_empty) == set()
+    (ep_empty / "archive_sources.json").write_text(json.dumps({"episode": "Empty", "assets": {}}), encoding="utf-8")
+    assert load_archival_scene_ids(ep_empty) == set()
+
+
+def test_ai_scene_depolish_vf_spec():
+    """Kiểm tra thông số khử bóng HDR cho cảnh AI (có saturation, curves, noise, scale+crop; KHÔNG có unsharp)."""
+    assert build_ai_scene_depolish_vf("off") == ""
+
+    vf_light = build_ai_scene_depolish_vf("light", width=1080, height=1920)
+    assert "eq=saturation=0.95" in vf_light
+    assert "curves=all='0/0 0.5/0.5 0.85/0.80 1/0.92'" in vf_light
+    assert "noise=alls=4:allf=t+u" in vf_light
+    assert "scale=1114:1978:flags=lanczos" in vf_light
+    assert "crop=1080:1920:" in vf_light
+    assert "unsharp" not in vf_light
+
+    vf_med = build_ai_scene_depolish_vf("medium", width=1080, height=1920)
+    assert "eq=saturation=0.95" in vf_med
+    assert "curves=all='0/0 0.5/0.5 0.85/0.77 1/0.88'" in vf_med
+    assert "noise=alls=6:allf=t+u" in vf_med
+    assert "scale=1114:1978:flags=lanczos" in vf_med
+    assert "crop=1080:1920:" in vf_med
+    assert "unsharp" not in vf_med
+
+    vf_strong = build_ai_scene_depolish_vf("strong", width=1080, height=1920)
+    assert "eq=saturation=0.93" in vf_strong
+    assert "curves=all='0/0 0.5/0.5 0.85/0.74 1/0.85'" in vf_strong
+    assert "noise=alls=8:allf=t+u" in vf_strong
+    assert "scale=1124:1998:flags=lanczos" in vf_strong
+    assert "crop=1080:1920:" in vf_strong
+    assert "unsharp" not in vf_strong

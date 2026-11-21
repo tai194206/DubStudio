@@ -1242,6 +1242,118 @@ def test_settings_sfx_volume_backward_compat(tmp_path):
     assert high.story_render_kwargs()["sfx_volume"] == pytest.approx(1.5)
 
 
+def test_story_pipeline_selective_ai_filter(tmp_path, monkeypatch):
+    """Selective Anti-AI: cảnh tư liệu thật trong archive_sources.json giữ nét gốc 100%,
+    chỉ cảnh AI áp lọc khử bóng HDR nhẹ; cuối luồng giữ -map_metadata -1 sạch và phụ đề sắc nét.
+    """
+    import core.story_pipeline as sp
+    from core.config import DubSettings
+    from core.reporter import Reporter
+
+    ep_dir = tmp_path / "Dien_Bien_Phu_Tap_04"
+    assets_dir = ep_dir / "assets"
+    assets_dir.mkdir(parents=True)
+
+    run_ffmpeg(["-f", "lavfi", "-i", "color=c=0x888888:s=720x1280:d=1", "-vframes", "1", str(assets_dir / "001.jpg")])
+    run_ffmpeg(["-f", "lavfi", "-i", "color=c=0x446688:s=720x1280:d=1", "-vframes", "1", str(assets_dir / "002.png")])
+
+    # Cảnh 1 là ảnh tư liệu thật từ archive_sources.json; Cảnh 2 là cảnh AI
+    (ep_dir / "archive_sources.json").write_text(
+        json.dumps(
+            {
+                "episode": "Dien_Bien_Phu_Tap_04",
+                "assets": {
+                    "001": {
+                        "scene_id": 1,
+                        "asset_file": "assets/001.jpg",
+                        "media_type": "image",
+                        "provider": "wikimedia_commons",
+                        "license": "Public domain",
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    sb_file = ep_dir / "storyboard.json"
+    sb_file.write_text(
+        json.dumps(
+            {
+                "title": "Selective_AntiAI_Test",
+                "scenes": [
+                    {"id": 1, "speech": "Ảnh tư liệu lịch sử thật.", "motion": "zoom_in", "sfx": "none"},
+                    {"id": 2, "speech": "Cảnh tái hiện bằng AI.", "motion": "pan_left", "sfx": "none"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    recorded_cmds: list[list[str]] = []
+    real_run_ffmpeg = sp.run_ffmpeg
+
+    def spy_run_ffmpeg(args, **kwargs):
+        args_list = [str(a) for a in args]
+        recorded_cmds.append(args_list)
+        return real_run_ffmpeg(args, **kwargs)
+
+    monkeypatch.setattr(sp, "run_ffmpeg", spy_run_ffmpeg)
+
+    logs: list[str] = []
+    out_mp4 = ep_dir / "out_selective.mp4"
+    pipe = StoryPipeline(
+        settings=DubSettings(keep_temp=False),
+        reporter=Reporter(on_log=lambda msg, lv="info": logs.append(msg)),
+        tts_engine=ToneTTS(),
+        work_root=tmp_path / "work",
+    )
+    res = pipe.render_story(
+        storyboard_path_or_obj=sb_file,
+        assets_dir=assets_dir,
+        output_path=out_mp4,
+        burn_subtitles=True,
+        subtitle_style="highlight_3words",
+        anti_ai_level="medium",
+        cinematic_grade=False,
+        loudness_norm=False,
+    )
+    assert res.is_file()
+    out_info = probe(out_mp4)
+    assert out_info.has_video is True and out_info.has_audio is True
+
+    cmd_c1 = next(c for c in recorded_cmds if any(a.endswith("clip_001.mp4") for a in c))
+    cmd_c2 = next(c for c in recorded_cmds if any(a.endswith("clip_002.mp4") for a in c))
+    cmd_mix = next(c for c in recorded_cmds if any(a.endswith("out_selective.mp4") for a in c))
+
+    vf_c1 = cmd_c1[cmd_c1.index("-vf") + 1]
+    vf_c2 = cmd_c2[cmd_c2.index("-vf") + 1]
+    fc_mix = cmd_mix[cmd_mix.index("-filter_complex") + 1]
+
+    # Cảnh 1 (tư liệu thật): giữ nét gốc 100%, KHÔNG áp bộ lọc khử bóng AI
+    assert "curves=" not in vf_c1
+    assert "eq=saturation=" not in vf_c1
+    assert "noise=" not in vf_c1
+    assert "unsharp" not in vf_c1
+
+    # Cảnh 2 (AI): CÓ áp lọc khử bóng HDR nhẹ và KHÔNG dùng unsharp
+    assert "eq=saturation=0.95" in vf_c2
+    assert "curves=all='0/0 0.5/0.5 0.85/0.77 1/0.88'" in vf_c2
+    assert "noise=alls=6:allf=t+u" in vf_c2
+    assert "crop=1080:1920:" in vf_c2
+    assert "unsharp" not in vf_c2
+
+    # Mix cuối: KHÔNG làm đục hình toàn cục hay cắt/echo giọng, vẫn đốt ASS & giữ -map_metadata -1
+    assert "rotate=" not in fc_mix
+    assert "anoisesrc=" not in fc_mix
+    assert "ass=subs.ass" in fc_mix
+    assert "-map_metadata" in cmd_mix and "-1" in cmd_mix
+    assert any("[Anti-AI Selective]" in line for line in logs)
+
+
+
 
 
 

@@ -11,13 +11,14 @@ Tuyệt đối KHÔNG import tkinter hay gui/ trong module này.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import random
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Literal, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, List, Literal, Optional, Sequence, Tuple, Union
 
 from .errors import DubberError
 from .ffmpeg_utils import _NO_WINDOW, atempo_chain, get_ffmpeg, probe, run_ffmpeg
@@ -107,6 +108,150 @@ PRESETS = {
         audio_eq="highpass=f=70,equalizer=f=220:t=q:w=1.2:g=0.7,equalizer=f=3500:t=q:w=1.4:g=0.8",
     ),
 }
+
+
+@dataclass(frozen=True)
+class AIDepolishSpec:
+    """Thông số khử bóng HDR nhẹ cho riêng từng cảnh tạo bằng AI."""
+
+    scale_factor: float
+    saturation: float
+    curves: str
+    noise: str
+
+
+DEPOLISH_SPECS = {
+    "light": AIDepolishSpec(
+        scale_factor=1.03,
+        saturation=0.95,
+        curves="curves=all='0/0 0.5/0.5 0.85/0.80 1/0.92'",
+        noise="noise=alls=4:allf=t+u",
+    ),
+    "medium": AIDepolishSpec(
+        scale_factor=1.03,
+        saturation=0.95,
+        curves="curves=all='0/0 0.5/0.5 0.85/0.77 1/0.88'",
+        noise="noise=alls=6:allf=t+u",
+    ),
+    "strong": AIDepolishSpec(
+        scale_factor=1.04,
+        saturation=0.93,
+        curves="curves=all='0/0 0.5/0.5 0.85/0.74 1/0.85'",
+        noise="noise=alls=8:allf=t+u",
+    ),
+}
+
+
+def _parse_positive_int(val: Any) -> Optional[int]:
+    if isinstance(val, bool) or val is None:
+        return None
+    if isinstance(val, int):
+        return val if val > 0 else None
+    text = str(val).strip()
+    if text.isdigit():
+        num = int(text)
+        return num if num > 0 else None
+    return None
+
+
+def load_archival_scene_ids(project_dir: Union[Path, str, None]) -> set[int]:
+    """Đọc tập scene_id tư liệu thật từ `<project_dir>/archive_sources.json`.
+
+    Hỗ trợ linh hoạt cấu trúc `{"assets": {"001": {"scene_id": 1}}}` của fetch_archive_media.py,
+    dict theo khóa số cảnh hoặc list bản ghi có trường `scene` / `scene_id`.
+    Trả về `set()` nếu file chưa tồn tại, rỗng hoặc không hợp lệ.
+    """
+    if not project_dir:
+        return set()
+    sources_path = Path(project_dir) / "archive_sources.json"
+    if not sources_path.is_file():
+        return set()
+    try:
+        raw_text = sources_path.read_text(encoding="utf-8-sig").strip()
+        if not raw_text:
+            return set()
+        data = json.loads(raw_text)
+    except (OSError, ValueError):
+        return set()
+
+    scene_ids: set[int] = set()
+
+    def collect_from_seq(seq: Sequence[Any]) -> None:
+        for item in seq:
+            if isinstance(item, dict):
+                for k in ("scene_id", "scene", "id"):
+                    sid = _parse_positive_int(item.get(k))
+                    if sid is not None:
+                        scene_ids.add(sid)
+                        break
+            else:
+                sid = _parse_positive_int(item)
+                if sid is not None:
+                    scene_ids.add(sid)
+
+    def collect_from_mapping(mapping: dict) -> None:
+        for key, val in mapping.items():
+            sid: Optional[int] = None
+            if isinstance(val, dict):
+                for k in ("scene_id", "scene", "id"):
+                    sid = _parse_positive_int(val.get(k))
+                    if sid is not None:
+                        break
+            if sid is None:
+                sid = _parse_positive_int(key)
+            if sid is not None:
+                scene_ids.add(sid)
+
+    if isinstance(data, list):
+        collect_from_seq(data)
+        return scene_ids
+    if not isinstance(data, dict):
+        return set()
+
+    has_container = False
+    for container_key in ("assets", "items", "scenes"):
+        container = data.get(container_key)
+        if isinstance(container, dict):
+            has_container = True
+            collect_from_mapping(container)
+        elif isinstance(container, list):
+            has_container = True
+            collect_from_seq(container)
+
+    if not has_container:
+        collect_from_mapping(data)
+    return scene_ids
+
+
+def build_ai_scene_depolish_vf(
+    level: Union[str, bool, None],
+    width: int = 1080,
+    height: int = 1920,
+) -> str:
+    """Tạo chuỗi filter khử bóng nhựa HDR nhẹ riêng cho cảnh tạo bằng AI.
+
+    Giữ độ nét gốc (không unsharp, không xoay toàn khung), chỉ hạ bão hòa nhẹ,
+    dìm highlights qua curves, scale+crop vi mô 3–4% và rải hạt phim siêu mịn.
+    """
+    lv = normalize_anti_ai_level(level)
+    if lv == "off":
+        return ""
+
+    spec = DEPOLISH_SPECS[lv]
+    w = max(2, int(width) - (int(width) % 2))
+    h = max(2, int(height) - (int(height) % 2))
+    sw = max(w + 2, int(math.ceil((w * spec.scale_factor) / 2.0)) * 2)
+    sh = max(h + 2, int(math.ceil((h * spec.scale_factor) / 2.0)) * 2)
+    cx = (sw - w) // 2
+    cy = (sh - h) // 2
+    return (
+        f"scale={sw}:{sh}:flags=lanczos,"
+        f"crop={w}:{h}:{cx}:{cy},"
+        f"setsar=1,"
+        f"eq=saturation={spec.saturation:.2f},"
+        f"{spec.curves},"
+        f"{spec.noise}"
+    )
 
 
 def normalize_anti_ai_level(level_or_bool: Union[str, bool, None]) -> str:
