@@ -22,9 +22,10 @@ Hướng dẫn ngắn quy trình sản xuất 1 tập video lịch sử dọc `1
   `<episode_dir>/assets/full_audio.mp3`
 - Khi dựng phim, `StoryPipeline` tự dùng `faster-whisper` căn mốc từng từ trên bản gốc `1.00x` và lưu cache `cache/align_*.json` (sai số `0.01s`, đổi tốc độ/phụ đề không phải nhận diện lại).
 
-## Bước 4: Săn ảnh tư liệu thật & chạy batch Google Flow (`v5_run_all`)
-- Tải ảnh lịch sử thật (Wikimedia Commons / ảnh tư liệu gốc) theo `archive_checklist.md` (hoặc script săn ảnh `fetch_archive_images.py` nếu dùng kèm), lưu vào `<episode_dir>/assets/{id:03d}.jpg` (ưu tiên chạy bước này **trước** `flow_bot.py` để tận dụng bỏ qua ảnh đã có).
-- Chạy workflow `.agent/workflows/v5_run_all.md` (`automation/scripts/run_episode.py` + `flow_bot.py` batch pipelining): tự gửi lệnh song song theo lô, gen bù ảnh thiếu (`0 tín dụng`), gen clip AI (nếu có) và lọc tải sạch vào `assets/`.
+## Bước 4: Săn ảnh & video tư liệu thật rồi chạy Google Flow (`v5_run_all`)
+- Dùng `automation/scripts/fetch_archive_media.py` (theo từ khóa Việt / Anh / Pháp trong `archive_checklist.md`) để săn ứng viên ảnh (**Wikimedia Commons**) và clip video (**Internet Archive** kèm lưới xem trước 6 khung hình `_contact.jpg`) vào `automation/debug/archive_candidates/<ten_tap>/`.
+- Duyệt trực quan đảm bảo **đúng thời kỳ, 0 logo/watermark (`VTV/INA/AP/Reuters/Getty/British Pathé`)** rồi chuẩn hóa nạp vào `assets/` bằng `--mode commit-image` (`{id:03d}.jpg`) hoặc `--mode commit-video` (`{id:03d}.mp4`, đã lột tiếng `-an`, tự ghi `archive_sources.json`).
+- Sau đó chạy workflow `.agent/workflows/v5_run_all.md` (`automation/scripts/run_episode.py` + `flow_bot.py` batch pipelining): tự bỏ qua các cảnh đã có tư liệu thật (`SKIP_EXISTING_ASSET`) và chỉ gen bù các cảnh thiếu (`0 tín dụng`).
 
 ## Bước 5: Xuất video 9:16 trong DubStudio GUI
 1. Mở giao diện:

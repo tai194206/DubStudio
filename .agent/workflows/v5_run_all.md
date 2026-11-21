@@ -6,9 +6,14 @@ description: Quy trình tự động chạy trọn gói V5.2 (Săn ảnh tư li�
 
 Khi người dùng yêu cầu *"chạy tự động Tập X"* hoặc *"gen nốt Tập X"* cho một thư mục tập phim `<episode_dir>` trong `story_mode/projects/<Ten_Series>/<Ten_Tap>/`, thực hiện đúng trình tự sau:
 
-## Bước 1 — Săn & duyệt ảnh tư liệu lịch sử thật (Ưu tiên hàng đầu với hạng `0_100` / `30_70`)
-- Trước khi gọi Google Flow tạo ảnh bù, kiểm tra nếu có `automation/scripts/fetch_archive_images.py` (hoặc dựa theo `<episode_dir>/archive_checklist.md`) để săn và lưu ảnh tư liệu thật (Wikimedia Commons / ảnh lịch sử gốc) vào đúng tên file `<episode_dir>/assets/{id:03d}.jpg` (crop/chuẩn hóa sạch `9:16` hoặc ảnh sắc nét).
-- Duyệt nhanh chất lượng các ảnh vừa săn: xóa hoặc bỏ qua những tấm không đúng sự kiện/bị chữ đè nặng để Bước 3 tự gen ảnh phong cách phim tư liệu dự phòng (`0 tín dụng`).
+## Bước 1 — Săn & duyệt ảnh + video tư liệu lịch sử thật (Ưu tiên hàng đầu với hạng `0_100` / `30_70`)
+- Trước khi gọi Google Flow tạo ảnh bù, dùng `automation/scripts/fetch_archive_media.py` (dựa theo `<episode_dir>/archive_checklist.md` với từ khóa tiếng Việt / Anh / Pháp):
+  1. **Săn ứng viên vào `automation/debug/archive_candidates/<ten_tap>/`**:
+     - `--mode images`: tìm ảnh Public Domain / giấy phép mở trên **Wikimedia Commons** (lọc cạnh dài `>= 800px`, loại file `.svg`/logo).
+     - `--mode videos`: tìm clip trên **Internet Archive (`archive.org`)** & **Wikimedia Commons Video** và tự xuất **ảnh lưới xem trước 6 khung hình (`_contact.jpg`)** cho từng clip.
+  2. **Duyệt trực quan (BẮT BUỘC):** Agent và người dùng soi trực tiếp ảnh ứng viên và contact sheet 6 khung hình để loại bỏ 100% tư liệu dính watermark/logo đài (`VTV`, `INA`, `AP`, `Reuters`, `Getty`, `Shutterstock`, `British Pathé`), loại tư liệu sai thời kỳ, và chọn đúng khoảng giây đẹp nhất trên clip.
+  3. **Chuẩn hóa & nạp vào `assets/`:** chạy `--mode commit-image` (xuất `assets/{id:03d}.jpg`) hoặc `--mode commit-video --start <sec> --duration <sec>` (cắt đoạn chọn, lột sạch tiếng gốc `-an`, bỏ viền đen, xuất H.264 `30fps` vào `assets/{id:03d}.mp4`); tự ghi nguồn & giấy phép vào `archive_sources.json`.
+- Cảnh nào vẫn thiếu hoặc quá hiếm tư liệu thật thì giữ phương án bản đồ chiến thuật / địa hình biểu tượng hoặc để Bước 3 tự gen ảnh phong cách phim tư liệu dự phòng (`0 tín dụng`, tuyệt đối không bịa ảnh nhân vật thật).
 
 ## Bước 2 — Kiểm tra hiện trạng & bảo vệ thành phẩm có sẵn (`0 tín dụng`)
 Chạy lệnh kiểm tra tổng thể (không cần mở Chrome):

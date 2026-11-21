@@ -12,10 +12,23 @@ Mọi tác vụ chia tập, viết kịch bản, thiết kế hình ảnh, motio
   - `assets/` (BẮT BUỘC đúng chính tả `assets`, không viết `acess`; chứa `full_audio.mp3`, `{id:03d}.mp4` cho cảnh `flow_video`, `{id:03d}.jpg` cho cảnh `static_image`).
   - `raw_images/` (chứa toàn bộ ảnh gốc `{id:03d}.png` gen dự phòng từ Nano Banana Pro).
   - `storyboard.json` (chuẩn `core/story_schema.py` v3.0 kèm `"asset_ratio_tier"` — tương thích cả `shot_mode: "scene"` và `"planned"`).
-  - `archive_checklist.md` (danh sách các cảnh `static_image` kèm mô tả nội dung cần tìm, từ khóa tìm ảnh tư liệu thật tiếng Việt & tiếng Anh, và tên file đích `assets/{id:03d}.jpg`).
+  - `archive_checklist.md` (danh sách các cảnh `static_image` kèm mô tả nội dung cần tìm, từ khóa tìm ảnh/video tư liệu thật tiếng Việt, Anh, Pháp và tên file đích `assets/{id:03d}.jpg` / `.mp4`).
+  - `fact_check.md` (**BẮT BUỘC**: bảng kiểm chứng mọi mốc thời gian, quân số, tên đơn vị, thương vong, nhân vật, địa danh xuất hiện trong kịch bản kèm nguồn đối chiếu).
+  - `archive_sources.json` (nhật ký nguồn, tác giả, giấy phép, URL và mốc cắt video do `automation/scripts/fetch_archive_media.py` tự ghi khi nạp tư liệu thật vào `assets/`).
   - `elevenlabs.txt` (mỗi câu thoại 1 dòng, sạch 100%, không `...`, không chú thích).
   - `timeline_script.txt` (kịch bản có mốc `[HH:MM:SS.mmm -> HH:MM:SS.mmm]`).
   - `pipeline_state.json` (theo dõi trạng thái từng cảnh cho bot Playwright).
+
+## 1B. Luật Chính xác Lịch sử Tuyệt đối (Zero-Fabrication) & An toàn Bản quyền (Media Authenticity)
+- **Khóa sự thật lịch sử (Zero-Fabrication Policy):**
+  - **TUYỆT ĐỐI KHÔNG** bịa đặt ngày tháng, quân số, tên đơn vị, thương vong, địa danh hay câu nói của nhân vật lịch sử.
+  - Mọi sự kiện/con số đưa vào lời thoại (`elevenlabs.txt`) phải bám sát tài liệu `.txt` đầu vào hoặc chính sử đã được công nhận rộng rãi. Chi tiết nào không chắc chắn 100% **BẮT BUỘC loại bỏ**, không phóng đại hay suy diễn.
+  - Mỗi tập bắt buộc xuất file `fact_check.md` liệt kê bảng đối chiếu từng mốc thời gian, con số, nhân vật, đơn vị và địa danh kèm nguồn kiểm chứng.
+- **Khóa tư liệu thật & bản quyền (Media Authenticity Policy):**
+  - Ưu tiên tuyệt đối ảnh & video thuộc phạm vi công cộng / giấy phép mở từ **Wikimedia Commons** và **Internet Archive (`archive.org`)** qua `automation/scripts/fetch_archive_media.py`.
+  - **CẤM TUYỆT ĐỐI** lấy clip/ảnh dính logo đài truyền hình hoặc watermark bản quyền (`VTV`, `INA`, `AP`, `Reuters`, `Getty`, `Shutterstock`, `British Pathé` có đóng dấu).
+  - **CẤM** dùng nhầm tư liệu sai thời kỳ (ví dụ: tuyệt đối không dùng hình ảnh giai đoạn 1965–1975 cho Điện Biên Phủ 1954).
+  - **Khi cảnh khan hiếm tư liệu thật:** ưu tiên dùng **Bản đồ chiến thuật / sơ đồ địa hình / cảnh núi rừng, bối cảnh biểu tượng**. **TUYỆT ĐỐI KHÔNG** dùng AI tạo giả ảnh chụp nhân vật lịch sử thật làm những việc không có thật trong lịch sử (tránh vi phạm chính sách nội dung tổng hợp gây hiểu lầm của TikTok).
 
 ## 2. Quy chuẩn Kịch bản, Hook 3s & Giữ chân Viral V5.2 (`core/story_pipeline.py` v3.2)
 - **Luật Hook 3 giây đầu (Cảnh 1 — BẮT BUỘC):**
@@ -39,8 +52,8 @@ Mọi tác vụ chia tập, viết kịch bản, thiết kế hình ảnh, motio
 ## 3. Quy chuẩn Hình ảnh Lai V5.2 (4 Hạng ưu tiên Tư liệu thật + Google Flow dự phòng 0đ)
 - **Hệ thống 4 Hạng tỉ lệ ưu tiên (BẮT BUỘC đánh giá độ phong phú tư liệu lịch sử trước khi chia cảnh):**
   - **Hạng 1 — `0_100` (Mặc định ưu tiên cao nhất: 0%–15% `flow_video` / 85%–100% `static_image`):** Áp dụng cho các sự kiện cận đại – hiện đại có kho ảnh tư liệu phong phú (như Điện Biên Phủ 1954, Kháng chiến chống Mỹ...).
-    - Mục tiêu săn **100% ảnh tư liệu thật** qua `fetch_archive_images.py` (Wikimedia Commons / ảnh chiến trường, nhân vật, hiện vật gốc).
-    - Cảnh hiếm không tìm được ảnh thật thì `image_prompt` dự phòng (`0 tín dụng` từ Google Flow) **BẮT BUỘC** viết theo phong cách **ảnh phim tư liệu lịch sử thật** (*authentic 1954 archival documentary photograph, black-and-white or subtle aged sepia, candid wartime photojournalism, natural 35mm film grain, historical realism*) — **CẤM** phong cách minh họa 3D/AI bóng loáng để đồng bộ 100% với ảnh thật và tránh bị quét AI.
+    - Mục tiêu săn **100% ảnh & clip tư liệu thật** qua `automation/scripts/fetch_archive_media.py` (Wikimedia Commons + Internet Archive `archive.org`, duyệt contact sheet loại watermark/sai thời kỳ trước khi nạp `assets/`).
+    - Cảnh hiếm không tìm được ảnh/clip thật thì ưu tiên **Bản đồ chiến thuật / sơ đồ địa hình / cảnh núi rừng biểu tượng**; nếu cần `image_prompt` dự phòng (`0 tín dụng` từ Google Flow) thì **BẮT BUỘC** viết theo phong cách **ảnh phim tư liệu lịch sử thật** (*authentic 1954 archival documentary photograph, black-and-white or subtle aged sepia, candid wartime photojournalism, natural 35mm film grain, historical realism*) cho bối cảnh/địa hình/hiện vật — **CẤM** minh họa 3D/AI bóng loáng và **CẤM** AI bịa hành động của nhân vật lịch sử thật.
     - Có thể dùng **0 clip AI** (thuần tư liệu + bản đồ chiến thuật, `0 tín dụng`) hoặc tối đa 1–3 clip AI điểm đinh nếu thực sự cần chuyển động cao trào.
     - Không giới hạn số cảnh `static_image` đứng liền nhau, nhưng **BẮT BUỘC** 100% cảnh tĩnh không dùng `"static"` và 2 cảnh liền kề **không được trùng kiểu `ken_burns`**.
   - **Hạng 2 — `30_70`** (~30% AI / 70% thật, biên độ 25%–38% AI, tối đa **4** cảnh `static_image` liền nhau): Dùng khi tư liệu thật ở mức khá nhưng cần thêm clip động minh họa diễn biến.
