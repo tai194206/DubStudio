@@ -28,6 +28,9 @@
       "button:has-text('Video')",
       "button:has-text('9:16')",
       "button:has-text('16:9')",
+      "button:has-text('4:5')",
+      "button:has-text('3:4')",
+      "button:has-text('1:1')",
       "button[aria-label*='Cài đặt' i]",
       "button[aria-label*='Settings' i]"
     ],

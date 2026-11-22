@@ -28,8 +28,6 @@ from pysubs2 import Alignment, Color, SSAEvent, SSAFile, SSAStyle
 
 from .anti_ai_filter import (
     build_ai_scene_depolish_vf,
-    build_anti_ai_audio_graph,
-    build_anti_ai_video_filters,
     get_clean_metadata_flags,
     load_archival_scene_ids,
     normalize_anti_ai_level,
@@ -45,6 +43,12 @@ from .elevenlabs_alignment import (
 )
 from .errors import DubberError
 from .ffmpeg_utils import change_speed, probe, run_ffmpeg, to_wav
+from .frame_presets import (
+    FramePreset,
+    get_frame_preset,
+    resolve_frame_preset,
+    resolve_subtitle_layout,
+)
 from .models import Segment, WordTiming
 from .reporter import Reporter
 from .sfx_engine import find_sfx_file, load_or_synthesize_sfx
@@ -168,8 +172,13 @@ def create_tiktok_karaoke_style(
     font_size: int = 52,
     margin_v: int = 400,
     primary_hex: str = "#FFE600",
+    *,
+    margin_l: int = 80,
+    margin_r: int = 160,
+    outline: float = 4.0,
+    shadow: float = 2.0,
 ) -> SSAStyle:
-    """Tạo kiểu phụ đề Karaoke .ass chuẩn vùng an toàn TikTok 9:16."""
+    """Tạo kiểu phụ đề Karaoke .ass chuẩn vùng an toàn."""
     style = SSAStyle()
     style.fontname = font_name
     style.fontsize = font_size
@@ -181,12 +190,12 @@ def create_tiktok_karaoke_style(
     style.backcolor = Color(0, 0, 0, 128)
 
     style.borderstyle = 1
-    style.outline = 4.0
-    style.shadow = 2.0
+    style.outline = float(outline)
+    style.shadow = float(shadow)
     style.alignment = Alignment.BOTTOM_CENTER
     style.marginv = margin_v
-    style.marginl = 80
-    style.marginr = 160
+    style.marginl = margin_l
+    style.marginr = margin_r
     return style
 
 
@@ -195,8 +204,13 @@ def create_tiktok_pop_style(
     font_size: int = 72,
     margin_v: int = 390,
     primary_hex: str = "#FFE000",
+    *,
+    margin_l: int = 70,
+    margin_r: int = 110,
+    outline: float = 6.0,
+    shadow: float = 3.0,
 ) -> SSAStyle:
-    """Kiểu phụ đề nảy 1-2 chữ nổi bật ở vùng dưới an toàn TikTok 9:16."""
+    """Kiểu phụ đề nảy 1-2 chữ nổi bật ở vùng dưới an toàn."""
     style = SSAStyle()
     style.fontname = font_name
     style.fontsize = font_size
@@ -208,12 +222,12 @@ def create_tiktok_pop_style(
     style.backcolor = Color(0, 0, 0, 165)
 
     style.borderstyle = 1
-    style.outline = 6.0
-    style.shadow = 3.0
+    style.outline = float(outline)
+    style.shadow = float(shadow)
     style.alignment = Alignment.BOTTOM_CENTER
     style.marginv = margin_v
-    style.marginl = 70
-    style.marginr = 110
+    style.marginl = margin_l
+    style.marginr = margin_r
     return style
 
 
@@ -227,6 +241,11 @@ def create_tiktok_highlight3_style(
     font_name: str = "Arial",
     font_size: int = 66,
     margin_v: int = 400,
+    *,
+    margin_l: int = 55,
+    margin_r: int = 55,
+    outline: float = 6.5,
+    shadow: float = 4.0,
 ) -> SSAStyle:
     """Kiểu phụ đề cụm tối đa 3 chữ IN HOA (trắng viền đen đậm + bóng sâu, từ đang đọc sáng màu nổi bật)."""
     style = SSAStyle()
@@ -241,12 +260,12 @@ def create_tiktok_highlight3_style(
     style.backcolor = Color(0, 0, 0, 120)
 
     style.borderstyle = 1
-    style.outline = 6.5
-    style.shadow = 4.0
+    style.outline = float(outline)
+    style.shadow = float(shadow)
     style.alignment = Alignment.BOTTOM_CENTER
     style.marginv = margin_v
-    style.marginl = 55
-    style.marginr = 55
+    style.marginl = margin_l
+    style.marginr = margin_r
     return style
 
 
@@ -287,6 +306,12 @@ def _group_words_into_highlight_chunks(
 def create_scene_title_style(
     font_name: str = "Arial",
     font_size: int = 44,
+    *,
+    margin_v: int = 250,
+    margin_l: int = 60,
+    margin_r: int = 60,
+    outline: float = 4.0,
+    shadow: float = 2.5,
 ) -> SSAStyle:
     """Kiểu tiêu đề sử thi (on_screen_text) đặt nổi bật ở phần trên khung hình."""
     style = SSAStyle()
@@ -300,12 +325,12 @@ def create_scene_title_style(
     style.backcolor = Color(0, 0, 0, 150)
 
     style.borderstyle = 1
-    style.outline = 4.0
-    style.shadow = 2.5
+    style.outline = float(outline)
+    style.shadow = float(shadow)
     style.alignment = Alignment.TOP_CENTER
-    style.marginv = 250
-    style.marginl = 60
-    style.marginr = 60
+    style.marginv = margin_v
+    style.marginl = margin_l
+    style.marginr = margin_r
     return style
 
 
@@ -314,6 +339,10 @@ def create_watermark_style(
     font_size: int = 34,
     pos: str = "top_left",
     opacity_pct: int = 65,
+    *,
+    margin_v_top: int = 160,
+    margin_v_bottom: int = 560,
+    margin_side: int = 44,
 ) -> SSAStyle:
     """Kiểu Watermark tên kênh (hỗ trợ top_left, top_right, bottom_left và độ mờ tùy chỉnh)."""
     style = SSAStyle()
@@ -337,18 +366,18 @@ def create_watermark_style(
     if pos == "top_right":
         style.alignment = Alignment.TOP_RIGHT
         style.marginl = 40
-        style.marginr = 44
-        style.marginv = 160
+        style.marginr = margin_side
+        style.marginv = margin_v_top
     elif pos == "bottom_left":
         style.alignment = Alignment.BOTTOM_LEFT
-        style.marginl = 44
+        style.marginl = margin_side
         style.marginr = 40
-        style.marginv = 560  # né cụm caption của TikTok
+        style.marginv = margin_v_bottom  # né cụm caption của TikTok
     else:
         style.alignment = Alignment.TOP_LEFT
-        style.marginl = 44
+        style.marginl = margin_side
         style.marginr = 40
-        style.marginv = 160
+        style.marginv = margin_v_top
     return style
 
 
@@ -418,7 +447,7 @@ def generate_story_karaoke_ass(
     font_name: str = "Arial",
     use_kf: bool = True,
     subtitle_style: str = "karaoke_line",
-    sub_margin_v: int = 400,
+    sub_margin_v: Optional[int] = None,
     sub_color: str = "#FFE000",
     watermark_text: Optional[str] = None,
     watermark_pos: str = "top_left",
@@ -426,14 +455,23 @@ def generate_story_karaoke_ass(
     scene_titles: Optional[Sequence[Tuple[float, float, str]]] = None,
     total_duration: float = 0.0,
     burn_subtitles: bool = True,
+    frame_preset: Union[str, FramePreset] = "portrait_9_16",
 ) -> Path:
-    """Sinh file .ass 9:16 gồm phụ đề, tiêu đề cảnh (on_screen_text) và Watermark kênh."""
+    """Sinh file .ass gồm phụ đề, tiêu đề cảnh (on_screen_text) và Watermark theo frame_preset."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    layout = resolve_subtitle_layout(
+        frame_preset,
+        subtitle_style=subtitle_style,
+        font_size=font_size,
+        margin_v=sub_margin_v,
+    )
+    fp: FramePreset = layout["preset"]
+
     subs = SSAFile()
-    subs.info["PlayResX"] = 1080
-    subs.info["PlayResY"] = 1920
+    subs.info["PlayResX"] = layout["play_res_x"]
+    subs.info["PlayResY"] = layout["play_res_y"]
 
     karaoke_style_name = "KaraokeTikTok"
     pop_style_name = "PopWordTikTok"
@@ -441,24 +479,46 @@ def generate_story_karaoke_ass(
     title_style_name = "SceneTitleTikTok"
     wm_style_name = "ChannelWatermark"
 
+    karaoke_layout = (
+        layout
+        if subtitle_style == "karaoke_line"
+        else resolve_subtitle_layout(
+            fp,
+            subtitle_style="karaoke_line",
+            font_size=52,
+            margin_v=sub_margin_v,
+        )
+    )
     subs.styles[karaoke_style_name] = create_tiktok_karaoke_style(
         font_name=font_name,
-        font_size=min(font_size, 60) if subtitle_style == "karaoke_line" else 52,
-        margin_v=sub_margin_v,
+        font_size=karaoke_layout["font_size"],
+        margin_v=karaoke_layout["margin_v"],
         primary_hex=sub_color,
+        margin_l=karaoke_layout["margin_l"],
+        margin_r=karaoke_layout["margin_r"],
+        outline=karaoke_layout["outline"],
+        shadow=karaoke_layout["shadow"],
     )
     if subtitle_style == "pop_2words":
         subs.styles[pop_style_name] = create_tiktok_pop_style(
             font_name=font_name,
-            font_size=max(56, font_size),
-            margin_v=sub_margin_v,
+            font_size=layout["font_size"],
+            margin_v=layout["margin_v"],
             primary_hex=sub_color,
+            margin_l=layout["margin_l"],
+            margin_r=layout["margin_r"],
+            outline=layout["outline"],
+            shadow=layout["shadow"],
         )
     elif subtitle_style == "highlight_3words":
         subs.styles[hl3_style_name] = create_tiktok_highlight3_style(
             font_name=font_name,
-            font_size=max(54, min(font_size, 76)),
-            margin_v=sub_margin_v,
+            font_size=layout["font_size"],
+            margin_v=layout["margin_v"],
+            margin_l=layout["margin_l"],
+            margin_r=layout["margin_r"],
+            outline=layout["outline"],
+            shadow=layout["shadow"],
         )
 
     max_end_ms = int(round(total_duration * 1000)) if total_duration > 0 else 0
@@ -590,7 +650,15 @@ def generate_story_karaoke_ass(
 
     # Gắn tiêu đề cảnh on_screen_text (nếu bật)
     if scene_titles:
-        subs.styles[title_style_name] = create_scene_title_style(font_name=font_name, font_size=44)
+        subs.styles[title_style_name] = create_scene_title_style(
+            font_name=font_name,
+            font_size=fp.title_font_size,
+            margin_v=fp.title_margin_v,
+            margin_l=100 if fp.is_landscape else 60,
+            margin_r=100 if fp.is_landscape else 60,
+            outline=3.2 if fp.is_landscape else 4.0,
+            shadow=2.0 if fp.is_landscape else 2.5,
+        )
         for st_s, en_s, raw_title in scene_titles:
             title_txt = (raw_title or "").strip()
             if not title_txt:
@@ -607,9 +675,11 @@ def generate_story_karaoke_ass(
     if clean_wm:
         subs.styles[wm_style_name] = create_watermark_style(
             font_name=font_name,
-            font_size=34,
+            font_size=fp.wm_font_size,
             pos=watermark_pos,
             opacity_pct=watermark_opacity,
+            margin_v_top=fp.wm_margin_v_top,
+            margin_v_bottom=fp.wm_margin_v_bottom,
         )
         wm_end_ms = max(max_end_ms, 1000)
         subs.events.append(
@@ -648,20 +718,27 @@ def _build_video_clip_cmd(
     *,
     smart_clip_fit: bool = True,
     extra_vf: str = "",
+    frame_preset: Union[str, FramePreset] = "portrait_9_16",
 ) -> List[str]:
-    """Xây dựng lệnh FFmpeg render clip MP4 9:16.
+    """Xây dựng lệnh FFmpeg render clip MP4 theo frame_preset.
 
     Nếu clip gốc ngắn hơn target_dur không quá 45% (ví dụ clip Flow 5s gặp câu 6.5s),
     tự động kéo giãn nhẹ tốc độ bằng setpts thay vì lặp lại từ đầu gây giật hình.
+    Mọi extra_vf (như khử bóng Anti-AI) được chạy ở kích thước vùng ảnh hoạt động TRƯỚC bước pad.
     """
+    fp = get_frame_preset(frame_preset)
     vf_parts = [
-        "scale=1080:1920:force_original_aspect_ratio=increase",
-        "crop=1080:1920",
+        f"scale={fp.inner_w}:{fp.inner_h}:force_original_aspect_ratio=increase",
+        f"crop={fp.inner_w}:{fp.inner_h}",
         "setsar=1",
         "fps=30",
     ]
-    if extra_vf:
-        vf_parts.append(extra_vf)
+    clean_extra = (extra_vf or "").strip().strip(",")
+    if clean_extra:
+        vf_parts.append(clean_extra)
+    if fp.needs_pad:
+        vf_parts.append(fp.pad_filter)
+        vf_parts.append("setsar=1")
     vf_parts.append("format=yuv420p")
     base_vf = ",".join(vf_parts)
     use_stretch = False
@@ -754,8 +831,16 @@ def _concat_with_xfade(
     return res.returncode == 0 and out_video.is_file()
 
 
-def _build_zoompan_filter(motion: str, duration: float, *, extra_vf: str = "") -> str:
-    """Xây dựng chuỗi bộ lọc zoompan cho hiệu ứng Ken Burns 9:16 (1080x1920, 30fps)."""
+def _build_zoompan_filter(
+    motion: str,
+    duration: float,
+    *,
+    extra_vf: str = "",
+    frame_preset: Union[str, FramePreset] = "portrait_9_16",
+) -> str:
+    """Xây dựng chuỗi bộ lọc zoompan cho hiệu ứng Ken Burns đúng kích thước vùng ảnh hoạt động (trước pad)."""
+    fp = get_frame_preset(frame_preset)
+    iw, ih = fp.inner_w, fp.inner_h
     d = max(1, int(math.ceil(duration * 30)))
     step = 0.15 / max(d, 1)
 
@@ -763,35 +848,48 @@ def _build_zoompan_filter(motion: str, duration: float, *, extra_vf: str = "") -
         vf_zoom = (
             f"zoompan=z='min(pzoom+{step:.6f},1.25)':"
             f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-            f"d={d}:s=1080x1920:fps=30"
+            f"d={d}:s={iw}x{ih}:fps=30"
         )
     elif motion == "zoom_out":
         vf_zoom = (
             f"zoompan=z='if(eq(on,0),1.15,max(1.0,pzoom-{step:.6f}))':"
             f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-            f"d={d}:s=1080x1920:fps=30"
+            f"d={d}:s={iw}x{ih}:fps=30"
         )
     elif motion == "pan_left":
         vf_zoom = (
             f"zoompan=z='1.15':"
             f"x='(1.0-on/{d})*(iw-iw/zoom)':y='ih/2-(ih/zoom/2)':"
-            f"d={d}:s=1080x1920:fps=30"
+            f"d={d}:s={iw}x{ih}:fps=30"
         )
     elif motion == "pan_right":
         vf_zoom = (
             f"zoompan=z='1.15':"
             f"x='(on/{d})*(iw-iw/zoom)':y='ih/2-(ih/zoom/2)':"
-            f"d={d}:s=1080x1920:fps=30"
+            f"d={d}:s={iw}x{ih}:fps=30"
         )
     else:
         vf_zoom = (
             f"zoompan=z='1.0':"
             f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-            f"d={d}:s=1080x1920:fps=30"
+            f"d={d}:s={iw}x{ih}:fps=30"
         )
 
-    tail = f",{extra_vf}" if extra_vf else ""
-    return f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,{vf_zoom},setsar=1{tail},format=yuv420p"
+    parts = [
+        f"scale={iw}:{ih}:force_original_aspect_ratio=increase",
+        f"crop={iw}:{ih}",
+        "setsar=1",
+        vf_zoom,
+        "setsar=1",
+    ]
+    clean_extra = (extra_vf or "").strip().strip(",")
+    if clean_extra:
+        parts.append(clean_extra)
+    if fp.needs_pad:
+        parts.append(fp.pad_filter)
+        parts.append("setsar=1")
+    parts.append("format=yuv420p")
+    return ",".join(parts)
 
 
 def _norm_vi_token(text: str) -> str:
@@ -1282,11 +1380,12 @@ class StoryPipeline:
         show_scene_titles: bool = False,
         sub_font: str = "Arial",
         sub_font_size: int = 52,
-        sub_margin_v: int = 400,
+        sub_margin_v: Optional[int] = None,
         sub_color: str = "#FFE000",
         speed: float = 1.0,
+        frame_preset: Optional[str] = None,
     ) -> Path:
-        """Thực hiện toàn bộ quy trình dựng video Story 9:16."""
+        """Thực hiện toàn bộ quy trình dựng video Story theo preset khung hình thích ứng."""
         if shot_mode not in ("scene", "planned"):
             raise DubberError(f"shot_mode '{shot_mode}' không hợp lệ; chỉ chấp nhận 'scene' hoặc 'planned'")
         if subtitle_style not in ("karaoke_line", "pop_2words", "highlight_3words"):
@@ -1320,16 +1419,17 @@ class StoryPipeline:
             sb = load_storyboard(storyboard_path_or_obj)
 
         sb.ensure_scenes_from_beats()
+        fp = resolve_frame_preset(override=frame_preset, storyboard_preset=sb.frame_preset)
 
         if not output_path:
             clean_title = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in sb.title).strip("_")
-            output_path = OUTPUT_DIR / f"{clean_title or 'story'}_916.mp4"
+            output_path = OUTPUT_DIR / f"{clean_title or 'story'}_{fp.filename_suffix}.mp4"
         output_path = Path(output_path).resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         work = self.workdir()
         self.rep.log(
-            f"📖 Bắt đầu dựng phim: '{sb.title}' ({len(sb.scenes)} phân đoạn | chế độ={shot_mode} | chuyển cảnh={transition})"
+            f"📖 Bắt đầu dựng phim: '{sb.title}' ({len(sb.scenes)} phân đoạn | khung={fp.name} {fp.out_w}x{fp.out_h} | chế độ={shot_mode} | chuyển cảnh={transition})"
         )
 
         # ------------------------------------------------------------- 1. Khớp tài nguyên
@@ -1353,20 +1453,27 @@ class StoryPipeline:
                 if archival_ids:
                     break
 
-        selective_anti_ai = anti_ai_active and bool(archival_ids)
+        per_scene_anti_ai = anti_ai_active
         ai_depolish_vf = (
-            build_ai_scene_depolish_vf(eff_anti_ai_level, width=1080, height=1920)
-            if selective_anti_ai
+            build_ai_scene_depolish_vf(eff_anti_ai_level, width=fp.inner_w, height=fp.inner_h)
+            if per_scene_anti_ai
             else ""
         )
-        if selective_anti_ai:
+        if per_scene_anti_ai:
             n_archival = sum(1 for sc in sb.scenes if sc.id in archival_ids)
             n_ai = len(sb.scenes) - n_archival
-            self.rep.log(
-                f"🛡️ [Anti-AI Selective] Giữ nét gốc {n_archival} cảnh tư liệu thật "
-                f"| Áp lọc khử bóng nhẹ (mức={eff_anti_ai_level}) cho {n_ai} cảnh AI.",
-                "info",
-            )
+            if archival_ids:
+                self.rep.log(
+                    f"🛡️ [Anti-AI Selective] Giữ nét gốc {n_archival} cảnh tư liệu thật "
+                    f"| Áp lọc khử bóng nhẹ (mức={eff_anti_ai_level}, {fp.inner_w}x{fp.inner_h}) cho {n_ai} cảnh AI.",
+                    "info",
+                )
+            else:
+                self.rep.log(
+                    f"🛡️ [Anti-AI Per-Scene] Áp lọc khử bóng nhẹ từng cảnh (mức={eff_anti_ai_level}, {fp.inner_w}x{fp.inner_h}) "
+                    f"cho {n_ai} cảnh AI (0 ảnh tư liệu thật; giữ sạch giọng đọc & phụ đề).",
+                    "info",
+                )
         self.rep.check_cancel()
 
         # ------------------------------------------------------------- 2. Xử lý Alignment & Nguồn Âm thanh
@@ -1589,7 +1696,7 @@ class StoryPipeline:
             self.rep.log(f"✓ Đã tạo xong giọng đọc ({engine.name}{spd_note}). Tổng thời lượng: {total_duration:.2f}s", "ok")
 
         # ------------------------------------------------------------- 3. Sinh phụ đề .ass, Tiêu đề cảnh & Watermark
-        ass_path = work / "story_karaoke_916.ass"
+        ass_path = work / f"story_karaoke_{fp.filename_suffix}.ass"
         has_aligned_words = any(len(getattr(sc, "words", [])) > 0 for sc in sb.scenes)
         clean_wm = (watermark_text or "").strip()
 
@@ -1604,7 +1711,13 @@ class StoryPipeline:
         has_ass_overlay = burn_subtitles or bool(clean_wm) or bool(scene_title_events)
 
         if has_aligned_words and subtitle_style == "karaoke_line" and not clean_wm and not scene_title_events:
-            export_karaoke_ass(sb.scenes, ass_path, max_words_per_line=6)
+            export_karaoke_ass(
+                sb.scenes,
+                ass_path,
+                max_words_per_line=6,
+                frame_preset=fp,
+                margin_v=sub_margin_v,
+            )
         elif timeline_segments or clean_wm or scene_title_events:
             effective_segments = timeline_segments
             if has_aligned_words and not any(seg.words for seg in timeline_segments):
@@ -1631,6 +1744,7 @@ class StoryPipeline:
                 scene_titles=scene_title_events or None,
                 total_duration=total_duration,
                 burn_subtitles=burn_subtitles,
+                frame_preset=fp,
             )
         else:
             self.rep.log("⚠️ Không có phân đoạn nào cho phụ đề.", "warn")
@@ -1639,9 +1753,15 @@ class StoryPipeline:
         exported_ass = output_path.with_suffix(".ass")
         shutil.copyfile(str(ass_path), str(exported_ass))
 
-        # ------------------------------------------------------------- 4. Render video 9:16 (scene hoặc planned)
+        # ------------------------------------------------------------- 4. Render video theo frame_preset (scene hoặc planned)
         rendered_scene_videos: List[Path] = []
         base_clip_durations: List[float] = []
+
+        per_scene_grade_vf = (
+            ("colorbalance=rs=0.03:gs=0.005:bs=-0.03" if per_scene_anti_ai else CINEMATIC_GRADE_FILTER)
+            if (cinematic_grade and fp.needs_pad)
+            else ""
+        )
 
         # Chỉ bật xfade nếu có từ 2 phân đoạn trở lên và thời lượng tối thiểu đủ lớn
         use_xfade = transition != "none"
@@ -1716,7 +1836,7 @@ class StoryPipeline:
 
             for i, r in enumerate(runs):
                 self.rep.check_cancel()
-                self.rep.progress(45 + int(i * 35 / max(1, len(runs))), f"Render continuous run 9:16 ({i + 1}/{len(runs)})")
+                self.rep.progress(45 + int(i * 35 / max(1, len(runs))), f"Render continuous run {fp.aspect_label} ({i + 1}/{len(runs)})")
 
                 loc_name = r.location
                 first_shot_id = r.shot_ids[0] if r.shot_ids else 1
@@ -1732,7 +1852,12 @@ class StoryPipeline:
 
                 is_video = asset_file.suffix.lower() in ASSET_VIDEO_EXTS
                 run_has_archival = any(sid in archival_ids for sid in (r.shot_ids or []))
-                run_extra_vf = ai_depolish_vf if (selective_anti_ai and not run_has_archival) else ""
+                run_extra_parts = []
+                if per_scene_anti_ai and not run_has_archival and ai_depolish_vf:
+                    run_extra_parts.append(ai_depolish_vf)
+                if per_scene_grade_vf:
+                    run_extra_parts.append(per_scene_grade_vf)
+                run_extra_vf = ",".join(run_extra_parts)
                 if is_video:
                     cmd = _build_video_clip_cmd(
                         asset_file,
@@ -1740,11 +1865,10 @@ class StoryPipeline:
                         out_clip,
                         smart_clip_fit=smart_clip_fit,
                         extra_vf=run_extra_vf,
+                        frame_preset=fp,
                     )
                 else:
-                    vf = build_run_filter(r, fps=30)
-                    if run_extra_vf:
-                        vf = f"{vf},{run_extra_vf},format=yuv420p"
+                    vf = build_run_filter(r, fps=30, frame_preset=fp, extra_vf=run_extra_vf)
                     cmd = [
                         "-loop", "1",
                         "-t", f"{render_dur:.3f}",
@@ -1774,7 +1898,7 @@ class StoryPipeline:
 
             for i, sc in enumerate(sb.scenes):
                 self.rep.check_cancel()
-                self.rep.progress(45 + int(i * 35 / max(1, total_scenes)), f"Render cảnh 9:16 ({i + 1}/{total_scenes})")
+                self.rep.progress(45 + int(i * 35 / max(1, total_scenes)), f"Render cảnh {fp.aspect_label} ({i + 1}/{total_scenes})")
 
                 asset_file = asset_map[sc.id]
                 tail_pad = eff_trans_dur if (use_xfade and i < total_scenes - 1) else 0.0
@@ -1782,7 +1906,12 @@ class StoryPipeline:
                 out_clip = scenes_video_dir / f"clip_{sc.id:03d}.mp4"
 
                 is_video = (sc.asset_type == "flow_video") or (asset_file.suffix.lower() in ASSET_VIDEO_EXTS)
-                scene_extra_vf = ai_depolish_vf if (selective_anti_ai and sc.id not in archival_ids) else ""
+                scene_extra_parts = []
+                if per_scene_anti_ai and (sc.id not in archival_ids) and ai_depolish_vf:
+                    scene_extra_parts.append(ai_depolish_vf)
+                if per_scene_grade_vf:
+                    scene_extra_parts.append(per_scene_grade_vf)
+                scene_extra_vf = ",".join(scene_extra_parts)
                 if is_video:
                     cmd = _build_video_clip_cmd(
                         asset_file,
@@ -1790,10 +1919,16 @@ class StoryPipeline:
                         out_clip,
                         smart_clip_fit=smart_clip_fit,
                         extra_vf=scene_extra_vf,
+                        frame_preset=fp,
                     )
                 else:
                     effective_motion = sc.ken_burns or sc.motion
-                    vf = _build_zoompan_filter(effective_motion, render_dur, extra_vf=scene_extra_vf)
+                    vf = _build_zoompan_filter(
+                        effective_motion,
+                        render_dur,
+                        extra_vf=scene_extra_vf,
+                        frame_preset=fp,
+                    )
                     cmd = [
                         "-loop", "1",
                         "-t", f"{render_dur:.3f}",
@@ -1817,7 +1952,7 @@ class StoryPipeline:
         self.rep.check_cancel()
 
         # ------------------------------------------------------------- 5. Ghép nối video (Xfade hoặc Concat)
-        self.rep.progress(82, "Đang ghép nối chuỗi cảnh video 9:16...")
+        self.rep.progress(82, f"Đang ghép nối chuỗi cảnh video {fp.aspect_label}...")
         raw_full_video = work / "full_video_raw.mp4"
 
         xfade_done = False
@@ -1932,7 +2067,7 @@ class StoryPipeline:
             self.rep.log("🔇 Âm lượng SFX = 0% → bỏ qua hiệu ứng âm thanh.", "info")
 
         # ------------------------------------------------------------- 7. Trộn BGM Fade/Ducking, SFX, Hậu kỳ & Xuất File
-        self.rep.progress(90, "Đang trộn âm thanh, áp hậu kỳ và xuất video 9:16...")
+        self.rep.progress(90, f"Đang trộn âm thanh, áp hậu kỳ và xuất video {fp.aspect_label}...")
 
         resolved_bgm = None
         if bgm_path and Path(bgm_path).is_file():
@@ -1958,7 +2093,6 @@ class StoryPipeline:
             vcodec_args = ["-c:v", "libx264", "-profile:v", "high", "-crf", "24", "-preset", "medium", "-pix_fmt", "yuv420p"]
 
         metadata_args = get_clean_metadata_flags() if anti_ai_active else ["-movflags", "+faststart"]
-        apply_global_anti_ai = anti_ai_active and not selective_anti_ai
         bgm_fade_in_d = min(1.0, max(0.1, total_duration * 0.2))
         bgm_fade_out_d = min(1.8, max(0.2, total_duration * 0.35))
         bgm_fade_out_st = max(0.0, total_duration - bgm_fade_out_d)
@@ -1967,22 +2101,6 @@ class StoryPipeline:
             f"afade=t=in:st=0:d={bgm_fade_in_d:.3f},"
             f"afade=t=out:st={bgm_fade_out_st:.3f}:d={bgm_fade_out_d:.3f}"
         )
-        anti_ai_vf = (
-            build_anti_ai_video_filters(
-                eff_anti_ai_level,
-                width=1080,
-                height=1920,
-                film_grain=bool(anti_ai_grain),
-                seed=sb.title,
-            )
-            if apply_global_anti_ai
-            else []
-        )
-        if apply_global_anti_ai:
-            self.rep.log(
-                f"🛡️ Áp bộ lọc Né quét AI 1-pass toàn cục (mức={eff_anti_ai_level} | grain={'bật' if anti_ai_grain else 'tắt'}) trước lớp phụ đề ASS.",
-                "info",
-            )
 
         def build_mix_cmd(include_normalize: bool = True) -> List[str]:
             norm = ":normalize=0" if include_normalize else ""
@@ -2003,16 +2121,10 @@ class StoryPipeline:
 
             fc_parts = []
             vf_chain: List[str] = []
-            # 1) Áp Anti-AI video filters TRƯỚC bước đốt phụ đề ASS để chữ phụ đề luôn thẳng và sắc nét
-            if anti_ai_vf:
-                vf_chain.extend(anti_ai_vf)
-            if cinematic_grade:
-                if selective_anti_ai:
-                    # Bảo toàn độ nét & 4 góc tư liệu thật (tránh noise/vignette toàn cục)
+            # Chỉ giữ lớp màu nhẹ toàn cục ở bước cuối khi khung không có dải đen pad (còn khung có dải đen đã áp trước pad).
+            if cinematic_grade and not fp.needs_pad:
+                if per_scene_anti_ai:
                     vf_chain.append("colorbalance=rs=0.03:gs=0.005:bs=-0.03")
-                elif apply_global_anti_ai and anti_ai_grain and eff_anti_ai_level in ("medium", "strong"):
-                    # Anti-AI đã phủ hạt phim & tối góc dịu → chỉ thêm sắc ấm điện ảnh tránh tối góc kép
-                    vf_chain.append("colorbalance=rs=0.05:gs=0.01:bs=-0.05")
                 else:
                     vf_chain.append(CINEMATIC_GRADE_FILTER)
 
@@ -2032,8 +2144,8 @@ class StoryPipeline:
             post_parts.append("alimiter=limit=0.95:attack=5:release=50:level=0")
             master_post = ",".join(post_parts)
 
-            mix_out_label = "[_amix_pre]" if apply_global_anti_ai else "[aout]"
-            direct_post = "" if apply_global_anti_ai else f",{master_post}"
+            mix_out_label = "[aout]"
+            direct_post = f",{master_post}"
             sfx_bus = (
                 f"[{sfx_idx}:a]{_FMT},"
                 f"equalizer=f=100:t=q:w=1.0:g=3.5,"
@@ -2066,19 +2178,6 @@ class StoryPipeline:
                 )
             else:
                 fc_parts.append(f"[1:a]{_FMT}{direct_post}{mix_out_label}")
-
-            if apply_global_anti_ai:
-                fc_parts.append(
-                    build_anti_ai_audio_graph(
-                        "[_amix_pre]",
-                        "[aout]",
-                        eff_anti_ai_level,
-                        sample_rate=44100,
-                        seed=sb.title,
-                        include_normalize=include_normalize,
-                        post_filters=master_post,
-                    )
-                )
 
             filter_complex_str = ";".join(fc_parts)
             return [
@@ -2113,6 +2212,6 @@ class StoryPipeline:
             pass
 
         file_size_mb = output_path.stat().st_size / (1024 * 1024)
-        self.rep.progress(100, f"Hoàn tất xuất video 9:16 ({file_size_mb:.1f}MB)")
-        self.rep.log(f"🎉 Hoàn thành video Story 9:16: {output_path} ({file_size_mb:.1f}MB)", "ok")
+        self.rep.progress(100, f"Hoàn tất xuất video {fp.aspect_label} ({file_size_mb:.1f}MB)")
+        self.rep.log(f"🎉 Hoàn thành video Story {fp.aspect_label} ({fp.out_w}x{fp.out_h}): {output_path} ({file_size_mb:.1f}MB)", "ok")
         return output_path

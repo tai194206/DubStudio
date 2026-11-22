@@ -29,6 +29,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.frame_presets import (  # noqa: E402
+    DEFAULT_FRAME_PRESET,
+    FRAME_PRESETS,
+    VALID_FRAME_PRESETS,
+    get_frame_preset,
+    normalize_frame_preset,
+)
 from core.story_schema import (  # noqa: E402
     VALID_MOTIONS,
     VALID_SFX,
@@ -38,6 +45,20 @@ from core.story_schema import (  # noqa: E402
 
 VALID_INTENTS = {"establish", "explain", "reveal", "emotion"}
 VALID_ASSET_TYPES = {"flow_video", "static_image"}
+
+FRAME_PRESET_ALLOWED_ASPECT_RATIOS: Dict[str, Tuple[str, ...]] = {
+    "portrait_9_16": ("9:16",),
+    "framed_4_5": ("4:5", "9:16"),
+    "framed_1_1": ("1:1", "9:16"),
+    "landscape_16_9": ("16:9",),
+}
+
+FRAME_PRESET_PROMPT_TOKENS: Dict[str, Tuple[str, ...]] = {
+    "portrait_9_16": ("9:16",),
+    "framed_4_5": ("4:5", "9:16"),
+    "framed_1_1": ("1:1", "square"),
+    "landscape_16_9": ("16:9",),
+}
 
 # Bảng 4 Hạng tỉ lệ ưu tiên Tư liệu thật (V5.2)
 ASSET_RATIO_TIERS: Dict[str, Dict[str, Any]] = {
@@ -247,6 +268,25 @@ def validate_storyboard(path: Path) -> Tuple[List[TierReport], Optional[Dict[str
     except Exception as e:
         t1.errors.append(f"core.story_schema.load_storyboard() báo lỗi: {e}")
 
+    if sb is not None:
+        effective_frame_preset = sb.frame_preset
+    else:
+        try:
+            effective_frame_preset = normalize_frame_preset(data.get("frame_preset"), allow_auto=False)
+        except Exception as e:
+            t1.errors.append(str(e))
+            effective_frame_preset = DEFAULT_FRAME_PRESET
+
+    raw_ar = data.get("aspect_ratio")
+    if raw_ar is not None and str(raw_ar).strip() != "":
+        ar_val = str(raw_ar).strip()
+        allowed_ars = FRAME_PRESET_ALLOWED_ASPECT_RATIOS.get(effective_frame_preset, ("9:16",))
+        if ar_val not in allowed_ars:
+            t1.errors.append(
+                f"'aspect_ratio'={ar_val!r} không tương thích với frame_preset={effective_frame_preset!r} "
+                f"(chấp nhận: {list(allowed_ars)})."
+            )
+
     if "project_title" in data:
         t1.errors.append("Không được dùng khóa 'project_title' — phải dùng 'title'.")
     title_val = data.get("title")
@@ -438,8 +478,12 @@ def validate_storyboard(path: Path) -> Tuple[List[TierReport], Optional[Dict[str
             t4.errors.append(f"Cảnh {sid}: 'image_prompt' bị rỗng.")
         else:
             img_lower = img_prompt.lower()
-            if "9:16" not in img_lower:
-                t4.errors.append(f"Cảnh {sid}: 'image_prompt' thiếu '9:16'.")
+            req_tokens = FRAME_PRESET_PROMPT_TOKENS.get(effective_frame_preset, ("9:16",))
+            if not any(tok in img_lower for tok in req_tokens):
+                t4.errors.append(
+                    f"Cảnh {sid}: 'image_prompt' thiếu chỉ thị tỉ lệ khung cho {effective_frame_preset} "
+                    f"(cần một trong {list(req_tokens)})."
+                )
             if "no text" not in img_lower:
                 t4.errors.append(f"Cảnh {sid}: 'image_prompt' thiếu 'no text'.")
 
@@ -614,6 +658,7 @@ def validate_storyboard(path: Path) -> Tuple[List[TierReport], Optional[Dict[str
 
     stats = {
         "title": str(data.get("title") or ""),
+        "frame_preset": effective_frame_preset,
         "asset_ratio_tier": effective_tier,
         "tier_label": tier_cfg["label"],
         "tier_inferred": tier_inferred,
@@ -702,8 +747,14 @@ def sync_episode_files(storyboard_path: Path, data: Dict[str, Any]) -> None:
             }
         )
 
+    try:
+        fp_name = normalize_frame_preset(data.get("frame_preset"), allow_auto=False)
+    except Exception:
+        fp_name = DEFAULT_FRAME_PRESET
+
     state_payload = {
         "title": str(data.get("title", "")),
+        "frame_preset": fp_name,
         "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "scenes": new_state_scenes,
     }
@@ -768,7 +819,12 @@ def print_report(
         print("\n" + "-" * 76)
         print("THỐNG KÊ TỔNG QUAN TẬP")
         print("-" * 76)
+        fp_stats = get_frame_preset(stats.get("frame_preset", DEFAULT_FRAME_PRESET))
         print(f"  Tiêu đề (title)       : {stats.get('title') or '(trống)'}")
+        print(
+            f"  Khung hình (preset)   : {fp_stats.name} "
+            f"(vùng ảnh {fp_stats.inner_w}x{fp_stats.inner_h} → xuất {fp_stats.out_w}x{fp_stats.out_h})"
+        )
         print(
             f"  Hạng tỉ lệ (tier)     : {tier_code} ({tier_src}) | "
             f"AI {pct_flow:.1f}% / Thật {pct_static:.1f}%"

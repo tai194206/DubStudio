@@ -226,8 +226,9 @@ def test_audio_duration_preserved_with_pitch_shift_and_silent_video_no_crash(tmp
 
 
 def test_story_pipeline_anti_ai_before_ass_and_bool_backward_compat(tmp_path, monkeypatch):
-    """Kiểm chứng StoryPipeline 1-pass:
-    - anti_ai_level='medium' gắn chuỗi rotate/crop TRƯỚC ass=subs.ass
+    """Kiểm chứng StoryPipeline Anti-AI Per-Scene khi 0 ảnh tư liệu thật:
+    - anti_ai_level='medium' áp khử bóng nhẹ (depolish) ở từng cảnh TRƯỚC pad/ASS,
+      giữ phụ đề ASS sắc nét, giữ sạch giọng đọc (không rotate/anoisesrc toàn cục) và xóa metadata.
     - Cờ anti_ai=True/False cũ tương thích ngược 100%.
     """
     import core.story_pipeline as sp
@@ -241,20 +242,25 @@ def test_story_pipeline_anti_ai_before_ass_and_bool_backward_compat(tmp_path, mo
         scenes=[StoryScene(id=1, speech="Xin chào Việt Nam.", motion="zoom_in")],
     )
 
-    captured_filters = []
+    recorded_cmds: list[list[str]] = []
     real_run_ffmpeg = sp.run_ffmpeg
 
     def spy_run_ffmpeg(args, **kwargs):
         args_list = [str(a) for a in args]
-        if "-filter_complex" in args_list:
-            idx = args_list.index("-filter_complex")
-            if idx + 1 < len(args_list):
-                captured_filters.append(args_list[idx + 1])
+        recorded_cmds.append(args_list)
         return real_run_ffmpeg(args, **kwargs)
 
     monkeypatch.setattr(sp, "run_ffmpeg", spy_run_ffmpeg)
 
-    # 1. anti_ai_level="medium" -> rotate/crop đứng TRƯỚC ass=subs.ass
+    def _find_vf(suffix: str) -> str:
+        cmd = next(c for c in recorded_cmds if any(a.endswith(suffix) for a in c))
+        return cmd[cmd.index("-vf") + 1]
+
+    def _find_mix(suffix: str) -> tuple[list[str], str]:
+        cmd = next(c for c in recorded_cmds if any(a.endswith(suffix) for a in c))
+        return cmd, cmd[cmd.index("-filter_complex") + 1]
+
+    # 1. anti_ai_level="medium" (0 ảnh tư liệu thật) -> depolish từng cảnh, giữ sạch giọng & phụ đề
     out_med = tmp_path / "story_med.mp4"
     pipe1 = StoryPipeline(tts_engine=ToneTTS(), work_root=tmp_path / "w1")
     pipe1.render_story(
@@ -267,28 +273,48 @@ def test_story_pipeline_anti_ai_before_ass_and_bool_backward_compat(tmp_path, mo
         anti_ai_grain=True,
     )
     assert out_med.is_file()
-    final_fc = captured_filters[-1]
-    assert "rotate=" in final_fc
+    vf_med = _find_vf("clip_001.mp4")
+    assert "eq=saturation=0.95" in vf_med
+    assert "curves=all='0/0 0.5/0.5 0.85/0.77 1/0.88'" in vf_med
+    assert "noise=alls=6:allf=t+u" in vf_med
+    assert "crop=1080:1920:" in vf_med
+    assert "unsharp" not in vf_med
+
+    cmd_med, final_fc = _find_mix("story_med.mp4")
     assert "ass=subs.ass" in final_fc
-    assert final_fc.index("rotate=") < final_fc.index("ass=subs.ass")
-    assert "anoisesrc=" in final_fc
+    assert "rotate=" not in final_fc
+    assert "anoisesrc=" not in final_fc
+    assert "-map_metadata" in cmd_med and "-1" in cmd_med
 
     # 2. Tương thích ngược cờ cũ anti_ai=True (không truyền anti_ai_level)
-    captured_filters.clear()
+    recorded_cmds.clear()
     out_bool_true = tmp_path / "story_bool_true.mp4"
     pipe2 = StoryPipeline(tts_engine=ToneTTS(), work_root=tmp_path / "w2")
     pipe2.render_story(sb, assets_dir=assets_dir, output_path=out_bool_true, burn_subtitles=True, anti_ai=True)
     assert out_bool_true.is_file()
-    assert "rotate=" in captured_filters[-1]
+    vf_true = _find_vf("clip_001.mp4")
+    assert "eq=saturation=0.95" in vf_true
+    assert "curves=" in vf_true
+    cmd_true, fc_true = _find_mix("story_bool_true.mp4")
+    assert "ass=subs.ass" in fc_true
+    assert "rotate=" not in fc_true
+    assert "anoisesrc=" not in fc_true
+    assert "-map_metadata" in cmd_true and "-1" in cmd_true
 
     # 3. Tương thích ngược cờ cũ anti_ai=False
-    captured_filters.clear()
+    recorded_cmds.clear()
     out_bool_false = tmp_path / "story_bool_false.mp4"
     pipe3 = StoryPipeline(tts_engine=ToneTTS(), work_root=tmp_path / "w3")
     pipe3.render_story(sb, assets_dir=assets_dir, output_path=out_bool_false, burn_subtitles=True, anti_ai=False)
     assert out_bool_false.is_file()
-    assert "rotate=" not in captured_filters[-1]
-    assert "anoisesrc=" not in captured_filters[-1]
+    vf_false = _find_vf("clip_001.mp4")
+    assert "curves=" not in vf_false
+    assert "eq=saturation=" not in vf_false
+    assert "noise=" not in vf_false
+    cmd_false, fc_false = _find_mix("story_bool_false.mp4")
+    assert "rotate=" not in fc_false
+    assert "anoisesrc=" not in fc_false
+    assert "-map_metadata" not in cmd_false
 
 
 def test_load_archival_scene_ids(tmp_path):

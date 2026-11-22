@@ -8,9 +8,11 @@ Chỉ dùng FFmpeg zoompan, không phụ thuộc GUI.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple
+from typing import List, Sequence, Tuple, Union
 
+from core.frame_presets import FramePreset, get_frame_preset
 from core.shot_planner import Shot
 
 SRC_W, SRC_H = 1620, 2880      # phóng nguồn trước để zoompan ít rung
@@ -63,12 +65,31 @@ def zoom_expression(pieces: Sequence[Tuple[float, float, float, float]], fps: in
     return expr
 
 
-def build_run_filter(run: Run, fps: int = 30) -> str:
-    """Chuỗi filter FFmpeg cho một run (ảnh tĩnh nguồn)."""
+def build_run_filter(
+    run: Run,
+    fps: int = 30,
+    *,
+    frame_preset: Union[str, FramePreset] = "portrait_9_16",
+    extra_vf: str = "",
+) -> str:
+    """Chuỗi filter FFmpeg cho một run (ảnh tĩnh nguồn), chạy zoompan và extra_vf ở kích thước vùng ảnh trước pad."""
+    fp = get_frame_preset(frame_preset)
+    src_w = int(math.ceil(fp.inner_w * 1.5 / 2.0)) * 2
+    src_h = int(math.ceil(fp.inner_h * 1.5 / 2.0)) * 2
     n = max(1, round(run.duration * fps))
     z = zoom_expression(run.pieces, fps)
-    return (
-        f"scale={SRC_W}:{SRC_H}:force_original_aspect_ratio=increase,crop={SRC_W}:{SRC_H},"
-        f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-        f"d={n}:s={OUT_W}x{OUT_H}:fps={fps},setsar=1,format=yuv420p"
-    )
+    parts = [
+        f"scale={src_w}:{src_h}:force_original_aspect_ratio=increase",
+        f"crop={src_w}:{src_h}",
+        "setsar=1",
+        f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={n}:s={fp.inner_w}x{fp.inner_h}:fps={fps}",
+        "setsar=1",
+    ]
+    clean_extra = (extra_vf or "").strip().strip(",")
+    if clean_extra:
+        parts.append(clean_extra)
+    if fp.needs_pad:
+        parts.append(fp.pad_filter)
+        parts.append("setsar=1")
+    parts.append("format=yuv420p")
+    return ",".join(parts)

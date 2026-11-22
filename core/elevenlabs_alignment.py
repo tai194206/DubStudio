@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 
 import requests
 
+from .frame_presets import FramePreset, get_frame_preset, resolve_subtitle_layout
+
 
 def generate_voice_with_timestamps(
     api_key: str,
@@ -189,20 +191,39 @@ def export_karaoke_ass(
     aligned_scenes: Sequence[Union[Dict[str, Any], Any]],
     output_ass_path: Union[str, Path],
     max_words_per_line: int = 6,
+    *,
+    frame_preset: Union[str, FramePreset] = "portrait_9_16",
+    margin_v: Optional[int] = None,
+    font_size: Optional[int] = None,
 ) -> None:
     """Xuất file phụ đề .ass hiệu ứng tô màu Karaoke (\\kf) từ mốc thời gian ElevenLabs.
-    
-    Chia mỗi câu dài thành các cụm ngắn (mặc định 6 từ/dòng) chuẩn hiển thị dọc 9:16.
+
+    Chia mỗi câu dài thành các cụm ngắn (mặc định 6 từ/dòng) và tự căn tọa độ theo frame_preset.
     Hỗ trợ cả danh sách dict và danh sách StoryScene.
     """
-    ass_header = """[Script Info]
+    fp = get_frame_preset(frame_preset)
+    layout = resolve_subtitle_layout(
+        fp,
+        subtitle_style="karaoke_line",
+        font_size=font_size if font_size is not None else 58,
+        margin_v=margin_v,
+    )
+    eff_mv = 380 if (fp.name == "portrait_9_16" and margin_v is None) else layout["margin_v"]
+    if font_size is not None:
+        eff_fs = layout["font_size"] if fp.is_landscape else int(font_size)
+    else:
+        eff_fs = 46 if fp.is_landscape else (68 if fp.name == "portrait_9_16" else 64)
+    ml, mr = (120, 120) if fp.is_landscape else (60, 60)
+    outline, shadow = (3, 2) if fp.is_landscape else (4, 2)
+
+    ass_header = f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: {fp.out_w}
+PlayResY: {fp.out_h}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,Arial,68,&H0000FFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,60,60,380,1
+Style: Karaoke,Arial,{eff_fs},&H0000FFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},2,{ml},{mr},{eff_mv},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

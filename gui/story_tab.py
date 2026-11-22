@@ -8,6 +8,7 @@ from tkinter import colorchooser, messagebox, ttk
 
 from core.anti_ai_filter import ANTI_AI_LABELS, process_standalone_video
 from core.config import OUTPUT_DIR
+from core.frame_presets import FRAME_PRESET_GUI_LABELS, resolve_frame_preset
 from core.languages import get_language
 from core.story_pipeline import StoryPipeline, validate_story_assets
 from core.story_schema import load_storyboard
@@ -34,6 +35,8 @@ SHOT_MODES = {
     "planned": "Mạch liên tục v3 (Planned - khuyên dùng)",
     "scene": "Từng cảnh độc lập v2 (Scene)",
 }
+
+FRAME_PRESET_CHOICES = dict(FRAME_PRESET_GUI_LABELS)
 
 TRANSITIONS = {
     "fade": "Mờ chéo mượt (fade)",
@@ -117,6 +120,9 @@ class StoryTab(ttk.Frame):
         self.wm_opacity = tk.DoubleVar(value=float(getattr(s, "story_watermark_opacity", 65)))
 
         # 4. Dựng & Hậu kỳ
+        self.frame_preset_choice = tk.StringVar(
+            value=_label(FRAME_PRESET_CHOICES, getattr(s, "story_frame_preset", "auto"))
+        )
         self.shot_mode_choice = tk.StringVar(
             value=_label(SHOT_MODES, getattr(s, "story_shot_mode", "planned"))
         )
@@ -165,6 +171,7 @@ class StoryTab(ttk.Frame):
             self.engine_choice,
             self.edge_voice,
             self.eleven_voice,
+            self.frame_preset_choice,
             self.shot_mode_choice,
             self.transition_choice,
             self.sub_style_choice,
@@ -385,6 +392,15 @@ class StoryTab(ttk.Frame):
         box_edit = ttk.LabelFrame(t3, text="Nhịp dựng & Chuyển cảnh (v3.2)", style="Card.TLabelframe", padding=10)
         box_edit.pack(fill="x", pady=(0, 8))
 
+        self.cb_frame_preset = row(
+            box_edit,
+            "Khung hình",
+            lambda p: ttk.Combobox(
+                p, textvariable=self.frame_preset_choice, values=list(FRAME_PRESET_CHOICES.values()), state="readonly"
+            ),
+            label_width=16,
+        )
+
         row(
             box_edit,
             "Chế độ dựng",
@@ -585,6 +601,8 @@ class StoryTab(ttk.Frame):
 
         row1 = ttk.Frame(box_sum, style="Surface.TFrame")
         row1.pack(fill="x", pady=(0, 5))
+        self.bdg_frame = StatusBadge(row1, text="Khung hình", kind="info")
+        self.bdg_frame.pack(side="left", padx=(0, 6))
         self.bdg_voice = StatusBadge(row1, text="Giọng", kind="info")
         self.bdg_voice.pack(side="left", padx=(0, 6))
         self.bdg_mode = StatusBadge(row1, text="Chế độ", kind="info")
@@ -728,6 +746,16 @@ class StoryTab(ttk.Frame):
         self.cb_wm_pos.config(state="readonly" if wm_on else "disabled")
 
         # Cập nhật các badge tóm tắt ở cột phải
+        fp_key = _key(FRAME_PRESET_CHOICES, self.frame_preset_choice.get())
+        fp_badge_map = {
+            "auto": "🖼️ Tự động",
+            "portrait_9_16": "🖼️ 9:16",
+            "framed_4_5": "🖼️ 4:5",
+            "framed_1_1": "🖼️ 1:1",
+            "landscape_16_9": "🖼️ 16:9",
+        }
+        self.bdg_frame.set_status(fp_badge_map.get(fp_key, "🖼️ Tự động"), "info")
+
         mode_key = _key(SHOT_MODES, self.shot_mode_choice.get())
         self.bdg_mode.set_status(
             "🎞️ v3 Planned" if mode_key == "planned" else "🎞️ v2 Scene",
@@ -785,6 +813,7 @@ class StoryTab(ttk.Frame):
             tts_engine=_key(ENGINES, self.engine_choice.get()),
             edge_voice=self.edge_voice.get().strip() or "vi-VN-NamMinhNeural",
             elevenlabs_voice_id=self.eleven_voice.get().strip(),
+            story_frame_preset=_key(FRAME_PRESET_CHOICES, self.frame_preset_choice.get()),
             story_shot_mode=_key(SHOT_MODES, self.shot_mode_choice.get()),
             story_transition=_key(TRANSITIONS, self.transition_choice.get()),
             story_transition_duration=round(self.transition_dur.get(), 2),
@@ -862,8 +891,10 @@ class StoryTab(ttk.Frame):
             sb.ensure_scenes_from_beats()
             v3_ready = bool(sb.beats)
             est_sec = round(sb.total_words / 2.8) if sb.total_words else 0
+            eff_fp = resolve_frame_preset(_key(FRAME_PRESET_CHOICES, self.frame_preset_choice.get()), sb.frame_preset)
             self.log.write(
-                f"✓ Kịch bản: '{sb.title}' | {len(sb.scenes)} cảnh | ~{sb.total_words} từ (~{est_sec}s) | v3 beats: {'Có' if v3_ready else 'Không'}",
+                f"✓ Kịch bản: '{sb.title}' | {len(sb.scenes)} cảnh | ~{sb.total_words} từ (~{est_sec}s) "
+                f"| khung: {eff_fp.name} ({eff_fp.out_w}x{eff_fp.out_h}) | v3 beats: {'Có' if v3_ready else 'Không'}",
                 "ok",
             )
 

@@ -24,6 +24,16 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPTS_DIR.parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from core.frame_presets import (  # noqa: E402
+    DEFAULT_FRAME_PRESET,
+    VALID_FRAME_PRESETS,
+    resolve_frame_preset,
+)
+
 VALIDATE_SCRIPT = SCRIPTS_DIR / "validate_storyboard.py"
 FLOW_BOT_SCRIPT = SCRIPTS_DIR / "flow_bot.py"
 
@@ -142,8 +152,10 @@ def inspect_episode_status(
     data: Dict[str, Any],
     *,
     selected_ids: Optional[Set[int]] = None,
+    frame_preset: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Quét toàn bộ hiện trạng assets/, raw_images/, pipeline_state.json của tập phim."""
+    eff_fp = resolve_frame_preset(override=frame_preset, storyboard_preset=data.get("frame_preset"))
     assets_dir = ep_dir / "assets"
     raw_dir = ep_dir / "raw_images"
     scenes: List[Dict[str, Any]] = data.get("scenes", [])
@@ -215,6 +227,9 @@ def inspect_episode_status(
     )
 
     return {
+        "frame_preset": eff_fp.name,
+        "inner_size": f"{eff_fp.inner_w}x{eff_fp.inner_h}",
+        "out_size": f"{eff_fp.out_w}x{eff_fp.out_h}",
         "total_scenes": total_checked,
         "done_assets": done_assets,
         "missing_raw": missing_raw,
@@ -236,6 +251,10 @@ def print_check_summary(ep_dir: Path, info: Dict[str, Any]) -> None:
     print(f"BÁO CÁO ĐỐI CHIẾU TÀI NGUYÊN TẬP: {ep_dir.name}")
     print(f"Thư mục: {ep_dir}")
     print("=" * 84)
+    print(
+        f"  Khung hình (frame_preset)   : {info.get('frame_preset', DEFAULT_FRAME_PRESET)} "
+        f"(assets {info.get('inner_size', '1080x1920')} → xuất {info.get('out_size', '1080x1920')})"
+    )
     print(f"  Tổng số cảnh kiểm tra        : {info['total_scenes']}")
     print(f"  Đã có thành phẩm (assets/)   : {len(info['done_assets'])}/{info['total_scenes']}  {info['done_assets'] if info['done_assets'] else '[]'}")
     print(f"  Còn thiếu thành phẩm cuối    : {len(info['missing_assets'])}  {info['missing_assets'] if info['missing_assets'] else '[]'}")
@@ -266,6 +285,7 @@ def run_phase_check(
     *,
     selected_ids: Optional[Set[int]],
     dry_run: bool,
+    frame_preset: Optional[str] = None,
 ) -> Tuple[int, Optional[Dict[str, Any]]]:
     # Chế độ check chỉ chạy validate read-only (không ghi file khi --dry-run)
     rc = _run_validate(storyboard_path, sync_files=False)
@@ -278,7 +298,7 @@ def run_phase_check(
         print(f"\n[ABORT] Không đọc được JSON: {storyboard_path}")
         return 1, None
 
-    info = inspect_episode_status(ep_dir, data, selected_ids=selected_ids)
+    info = inspect_episode_status(ep_dir, data, selected_ids=selected_ids, frame_preset=frame_preset)
     print_check_summary(ep_dir, info)
     return 0, info
 
@@ -291,6 +311,7 @@ def run_phase_images(
     dry_run: bool,
     cdp_url: Optional[str],
     concurrency: Optional[int] = None,
+    frame_preset: Optional[str] = None,
 ) -> int:
     # Nếu chạy thật: chạy validate_storyboard.py --sync-files trước; dry-run: chỉ kiểm tra read-only
     rc_val = _run_validate(storyboard_path, sync_files=(not dry_run))
@@ -307,12 +328,16 @@ def run_phase_images(
         cmd.extend(["--cdp-url", cdp_url])
     if concurrency is not None:
         cmd.extend(["--concurrency", str(concurrency)])
+    if frame_preset:
+        cmd.extend(["--frame-preset", frame_preset])
 
     rc_bot = _run_subprocess(cmd)
 
     data = _load_json_safe(storyboard_path)
     if data is not None:
-        info = inspect_episode_status(ep_dir, data, selected_ids=_parse_scenes_csv(scenes_arg))
+        info = inspect_episode_status(
+            ep_dir, data, selected_ids=_parse_scenes_csv(scenes_arg), frame_preset=frame_preset
+        )
         done_img = info["total_scenes"] - len(info["missing_raw"])
         print("\n" + "-" * 84)
         print(
@@ -341,6 +366,7 @@ def run_phase_videos(
     yes: bool,
     cdp_url: Optional[str],
     concurrency: Optional[int] = None,
+    frame_preset: Optional[str] = None,
 ) -> int:
     rc_val = _run_validate(storyboard_path, sync_files=False)
     if rc_val != 0:
@@ -352,7 +378,7 @@ def run_phase_videos(
         return 1
 
     selected_ids = _parse_scenes_csv(scenes_arg)
-    info = inspect_episode_status(ep_dir, data, selected_ids=selected_ids)
+    info = inspect_episode_status(ep_dir, data, selected_ids=selected_ids, frame_preset=frame_preset)
     pending_vids: List[int] = info["pending_flow_videos"]
 
     if dry_run:
@@ -364,6 +390,8 @@ def run_phase_videos(
             cmd.extend(["--cdp-url", cdp_url])
         if concurrency is not None:
             cmd.extend(["--concurrency", str(concurrency)])
+        if frame_preset:
+            cmd.extend(["--frame-preset", frame_preset])
         _run_subprocess(cmd)
 
         raw_dir = ep_dir / "raw_images"
@@ -437,6 +465,8 @@ def run_phase_videos(
             cmd.extend(["--cdp-url", cdp_url])
         if concurrency is not None:
             cmd.extend(["--concurrency", str(concurrency)])
+        if frame_preset:
+            cmd.extend(["--frame-preset", frame_preset])
         rc = _run_subprocess(cmd)
         if rc == 2:
             print("\n🛑 [DỪNG KHẨN CẤP] flow_bot.py phát hiện sai cấu hình tín dụng (SafetyAssertionError)!")
@@ -447,7 +477,7 @@ def run_phase_videos(
 
     # Kết thúc bằng báo cáo giống --phase check
     data_after = _load_json_safe(storyboard_path) or data
-    info_after = inspect_episode_status(ep_dir, data_after, selected_ids=selected_ids)
+    info_after = inspect_episode_status(ep_dir, data_after, selected_ids=selected_ids, frame_preset=frame_preset)
     print_check_summary(ep_dir, info_after)
     if info_after["vid_policy_errors"]:
         print(
@@ -467,6 +497,7 @@ def run_phase_all(
     yes: bool,
     cdp_url: Optional[str],
     concurrency: Optional[int] = None,
+    frame_preset: Optional[str] = None,
 ) -> int:
     rc_img = run_phase_images(
         ep_dir,
@@ -475,6 +506,7 @@ def run_phase_all(
         dry_run=dry_run,
         cdp_url=cdp_url,
         concurrency=concurrency,
+        frame_preset=frame_preset,
     )
     if rc_img == 2:
         return 2
@@ -489,6 +521,7 @@ def run_phase_all(
             yes=yes,
             cdp_url=cdp_url,
             concurrency=concurrency,
+            frame_preset=frame_preset,
         )
 
     img_policy_err, _ = _read_policy_errors(ep_dir)
@@ -525,6 +558,7 @@ def run_phase_all(
         yes=yes,
         cdp_url=cdp_url,
         concurrency=concurrency,
+        frame_preset=frame_preset,
     )
 
 
@@ -577,6 +611,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="URL kết nối Chrome CDP (mặc định dùng flow_selectors.json).",
     )
+    parser.add_argument(
+        "--frame-preset",
+        type=str,
+        choices=VALID_FRAME_PRESETS,
+        default=None,
+        help="Ghi đè frame_preset từ storyboard.json (portrait_9_16 | framed_4_5 | framed_1_1 | landscape_16_9).",
+    )
     return parser
 
 
@@ -597,6 +638,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             storyboard_path,
             selected_ids=selected_ids,
             dry_run=args.dry_run,
+            frame_preset=args.frame_preset,
         )
         return rc
 
@@ -608,6 +650,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             dry_run=args.dry_run,
             cdp_url=args.cdp_url,
             concurrency=args.concurrency,
+            frame_preset=args.frame_preset,
         )
 
     if args.phase == "videos":
@@ -620,6 +663,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             yes=args.yes,
             cdp_url=args.cdp_url,
             concurrency=args.concurrency,
+            frame_preset=args.frame_preset,
         )
 
     return run_phase_all(
@@ -631,6 +675,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         yes=args.yes,
         cdp_url=args.cdp_url,
         concurrency=args.concurrency,
+        frame_preset=args.frame_preset,
     )
 
 

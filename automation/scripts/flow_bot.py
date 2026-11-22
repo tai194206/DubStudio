@@ -31,7 +31,7 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 # Đảm bảo xuất tiếng Việt UTF-8 sạch trên Windows
 if hasattr(sys.stdout, "reconfigure"):
@@ -48,6 +48,13 @@ for _p in (str(REPO_ROOT), str(SCRIPTS_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from core.frame_presets import (  # noqa: E402
+    DEFAULT_FRAME_PRESET,
+    VALID_FRAME_PRESETS,
+    FramePreset,
+    get_frame_preset,
+    resolve_frame_preset,
+)
 from validate_storyboard import (  # noqa: E402
     print_report,
     sync_episode_files,
@@ -180,22 +187,114 @@ def _file_ok(path: Path, min_bytes: int) -> bool:
     return path.is_file() and path.stat().st_size > min_bytes
 
 
+@dataclass(frozen=True)
+class FlowAspectPlan:
+    """Kế hoạch chọn tỉ lệ khung hình trên Google Flow và kích thước xuất assets/*.jpg."""
+
+    frame_preset: str
+    mode: str
+    preferred: Tuple[str, ...]
+    fallback: Tuple[str, ...]
+    target_size: Tuple[int, int]
+    fallback_prompt_cue: str = ""
+
+    @property
+    def all_candidates(self) -> Tuple[str, ...]:
+        return self.preferred + self.fallback
+
+
+def resolve_flow_aspect_plan(
+    frame_preset: Union[str, FramePreset, None] = DEFAULT_FRAME_PRESET,
+    *,
+    mode: str = "images",
+) -> FlowAspectPlan:
+    """Ánh xạ frame_preset sang danh sách nút tỉ lệ trên Google Flow + kích thước xuất assets/*.jpg."""
+    fp = get_frame_preset(frame_preset)
+    if fp.name == "landscape_16_9":
+        return FlowAspectPlan(
+            frame_preset=fp.name,
+            mode=mode,
+            preferred=("16:9", "Ngang", "Landscape"),
+            fallback=(),
+            target_size=(fp.inner_w, fp.inner_h),
+            fallback_prompt_cue="",
+        )
+    if fp.name == "framed_1_1":
+        return FlowAspectPlan(
+            frame_preset=fp.name,
+            mode=mode,
+            preferred=("1:1", "Vuông", "Square"),
+            fallback=("16:9", "Ngang", "Landscape"),
+            target_size=(fp.inner_w, fp.inner_h),
+            fallback_prompt_cue="1:1 square archival framing, centered subject, edge-to-edge full-bleed, no white borders",
+        )
+    if fp.name == "framed_4_5":
+        return FlowAspectPlan(
+            frame_preset=fp.name,
+            mode=mode,
+            preferred=("4:5", "3:4"),
+            fallback=("9:16", "Dọc", "Portrait"),
+            target_size=(fp.inner_w, fp.inner_h),
+            fallback_prompt_cue="4:5 vertical framing, balanced headroom, subject centered within 4:5 safe zone, edge-to-edge full-bleed, no white borders",
+        )
+    return FlowAspectPlan(
+        frame_preset="portrait_9_16",
+        mode=mode,
+        preferred=("9:16", "Dọc", "Portrait"),
+        fallback=(),
+        target_size=(fp.inner_w, fp.inner_h),
+        fallback_prompt_cue="",
+    )
+
+
+def _augment_prompt_for_flow_aspect(
+    prompt: str,
+    aspect_plan: FlowAspectPlan,
+    selected_ui_aspect: str,
+) -> str:
+    """Khi Flow fallback về khung 9:16/16:9 cho preset 4:5 hoặc 1:1, chèn cue khóa bố cục trung tâm."""
+    cue = (aspect_plan.fallback_prompt_cue or "").strip()
+    if not cue or not selected_ui_aspect or selected_ui_aspect not in aspect_plan.fallback:
+        return prompt
+    low = prompt.lower()
+    if "safe zone" in low or "centered subject" in low or "4:5 vertical framing" in low or "1:1 square" in low:
+        return prompt
+    m_notext = re.search(r",?\s*\bno\s+text\b", prompt, flags=re.IGNORECASE)
+    if m_notext:
+        head = prompt[: m_notext.start()].rstrip(" ,")
+        tail = prompt[m_notext.start() :].lstrip(" ,")
+        return f"{head}, {cue}, {tail}" if head else f"{cue}, {tail}"
+    return f"{prompt.rstrip(' ,')}, {cue}" if prompt.strip() else cue
+
+
 def _convert_image_to_png(src_path: Path, dst_png: Path) -> None:
-    """Đảm bảo ảnh gốc lưu tại raw_images/{id:03d}.png đúng định dạng PNG."""
-    from PIL import Image
+    """Đảm bảo ảnh gốc lưu tại raw_images/{id:03d}.png đúng định dạng PNG (giữ nguyên tỉ lệ gốc)."""
+    from PIL import Image, ImageOps
 
     dst_png.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(src_path) as img:
-        img.convert("RGB").save(dst_png, format="PNG")
+        ImageOps.exif_transpose(img).convert("RGB").save(dst_png, format="PNG")
 
 
-def _convert_png_to_jpg(raw_png: Path, dst_jpg: Path) -> None:
-    """Chuyển ảnh tĩnh raw PNG sang RGB JPG (quality=95) cho DubStudio Ken Burns."""
-    from PIL import Image
+def _convert_png_to_jpg(
+    raw_png: Path,
+    dst_jpg: Path,
+    *,
+    frame_preset: Union[str, FramePreset] = DEFAULT_FRAME_PRESET,
+) -> Tuple[int, int]:
+    """Chuyển raw PNG sang RGB JPG đúng kích thước vùng ảnh hoạt động của frame_preset (không kéo méo)."""
+    from PIL import Image, ImageOps
+
+    fp = get_frame_preset(frame_preset)
+    target_size = (fp.inner_w, fp.inner_h)
+    centering = (0.5, 0.45) if fp.name in ("framed_4_5", "portrait_9_16") else (0.5, 0.5)
 
     dst_jpg.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(raw_png) as img:
-        img.convert("RGB").save(dst_jpg, format="JPEG", quality=95)
+        rgb = ImageOps.exif_transpose(img).convert("RGB")
+        fitted = ImageOps.fit(rgb, target_size, method=Image.Resampling.LANCZOS, centering=centering)
+        fitted.save(dst_jpg, format="JPEG", quality=95, subsampling=0)
+        return fitted.size
 
 
 def _strip_audio_ffmpeg(tmp_mp4: Path, dst_mp4: Path) -> None:
@@ -432,12 +531,19 @@ def _print_plan_table(
     plan: List[ScenePlanItem],
     *,
     dry_run: bool,
+    frame_preset: Union[str, FramePreset] = DEFAULT_FRAME_PRESET,
 ) -> Tuple[int, int]:
     """In bảng kế hoạch chạy và trả về (run_count, total_credits)."""
+    fp = get_frame_preset(frame_preset)
+    aspect_plan = resolve_flow_aspect_plan(fp, mode=mode)
     tag = " [DRY-RUN — KHÔNG MỞ CHROME, KHÔNG TỐN TÍN DỤNG]" if dry_run else ""
     print("\n" + "=" * 96)
     print(f"KẾ HOẠCH FLOW BOT | MODE: {mode.upper()}{tag}")
     print(f"Tập phim: {storyboard_path.parent}")
+    print(
+        f"Khung hình: {fp.name} (Flow ưu tiên {aspect_plan.preferred[0]} | "
+        f"assets/*.jpg: {fp.inner_w}x{fp.inner_h} → xuất {fp.out_w}x{fp.out_h})"
+    )
     print("=" * 96)
     print(f"{'ID':>4} | {'Loại cảnh':<13} | {'Hành động':<19} | {'Tín dụng':>8} | Lý do / Chi tiết")
     print("-" * 96)
@@ -785,11 +891,92 @@ def _assert_settings_pill_summary(
         )
 
 
-def _configure_image_mode(page: Any, cfg: Dict[str, Any], scene_id: int) -> None:
+def _select_aspect_ratio_option(
+    page: Any,
+    aspect_plan: FlowAspectPlan,
+    *,
+    fallback_label: str = "",
+) -> str:
+    """Chọn tỉ lệ khung hình trên bảng cài đặt Google Flow theo thứ tự ưu tiên của FlowAspectPlan.
+
+    Chỉ tìm và bấm các control lựa chọn thật (radio/option/menuitemradio/tab),
+    tuyệt đối không fallback sang get_by_text để tránh click nhầm vào ô prompt.
+    """
+    option_selectors = (
+        "button[role='radio']",
+        "[role='option']",
+        "[role='menuitemradio']",
+        "[role='tab']",
+    )
+
+    def _try_pick(label_cand: str) -> bool:
+        target = label_cand.strip().lower()
+        if not target:
+            return False
+        for sel in option_selectors:
+            try:
+                loc = page.locator(sel)
+                cnt = loc.count()
+            except Exception:
+                continue
+            for idx in range(cnt):
+                el = loc.nth(idx)
+                try:
+                    if not el.is_visible():
+                        continue
+                    txt = (el.inner_text() or "").strip().lower()
+                    aria = (el.get_attribute("aria-label") or "").strip().lower()
+                    if target in txt or target in aria:
+                        el.click(timeout=4000)
+                        time.sleep(0.35)
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    for cand in aspect_plan.all_candidates:
+        if _try_pick(cand):
+            if cand in aspect_plan.fallback:
+                print(
+                    f"  [ASPECT] {aspect_plan.frame_preset}: UI Flow không có '{aspect_plan.preferred[0]}' "
+                    f"→ chọn fallback '{cand}' kèm khóa bố cục trung tâm.",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"  [ASPECT] {aspect_plan.frame_preset}: Đã chọn tỉ lệ '{cand}' trên Google Flow.",
+                    flush=True,
+                )
+            return cand
+
+    if fallback_label and _try_pick(fallback_label):
+        print(
+            f"  [ASPECT] {aspect_plan.frame_preset}: Fallback mặc định sang '{fallback_label}'.",
+            flush=True,
+        )
+        return fallback_label
+
+    print(
+        f"  [WARN] Không tìm thấy nút chọn tỉ lệ {list(aspect_plan.all_candidates)} trên UI Flow — giữ nguyên cài đặt hiện tại.",
+        flush=True,
+    )
+    return ""
+
+
+def _configure_image_mode(
+    page: Any,
+    cfg: Dict[str, Any],
+    scene_id: int,
+    *,
+    aspect_plan: Optional[FlowAspectPlan] = None,
+) -> str:
     im = cfg["image_mode"]
+    eff_plan = aspect_plan or resolve_flow_aspect_plan(DEFAULT_FRAME_PRESET, mode="images")
     _ensure_settings_open(page, cfg)
     _click_radio_option(page, im["tab_label"])
-    _click_radio_option(page, im["aspect_label"])
+    selected_aspect = _select_aspect_ratio_option(
+        page, eff_plan, fallback_label=im.get("aspect_label", "9:16")
+    )
     _select_model_from_dropdown(page, cfg, im["model_label"], scene_id, "images")
     _click_radio_option(page, im["batch_label"])
     time.sleep(0.3)
@@ -803,14 +990,24 @@ def _configure_image_mode(page: Any, cfg: Dict[str, Any], scene_id: int) -> None
         mode_tag="images",
     )
     _close_settings_popover(page, cfg)
+    return selected_aspect
 
 
-def _configure_video_mode(page: Any, cfg: Dict[str, Any], scene_id: int) -> None:
+def _configure_video_mode(
+    page: Any,
+    cfg: Dict[str, Any],
+    scene_id: int,
+    *,
+    aspect_plan: Optional[FlowAspectPlan] = None,
+) -> str:
     vm = cfg["video_mode"]
+    eff_plan = aspect_plan or resolve_flow_aspect_plan(DEFAULT_FRAME_PRESET, mode="videos")
     _ensure_settings_open(page, cfg)
     _click_radio_option(page, vm["tab_label"])
     _click_radio_option(page, vm["submode_label"])
-    _click_radio_option(page, vm["aspect_label"])
+    selected_aspect = _select_aspect_ratio_option(
+        page, eff_plan, fallback_label=vm.get("aspect_label", "9:16")
+    )
     _select_model_from_dropdown(page, cfg, vm["model_label"], scene_id, "videos")
     _click_radio_option(page, vm["batch_label"])
     time.sleep(0.3)
@@ -843,6 +1040,7 @@ def _configure_video_mode(page: Any, cfg: Dict[str, Any], scene_id: int) -> None
         mode_tag="videos",
     )
     _close_settings_popover(page, cfg)
+    return selected_aspect
 
 
 def _norm_nfc(s: str) -> str:
@@ -1861,13 +2059,16 @@ def run_images_mode(
     cdp_url: str,
     *,
     concurrency: Optional[int] = None,
+    frame_preset: Optional[str] = None,
 ) -> int:
-    """Chế độ --mode images: gen toàn bộ ảnh gốc (0 tín dụng) theo từng đợt song song + xuất JPG cho static_image."""
+    """Chế độ --mode images: gen toàn bộ ảnh gốc (0 tín dụng) theo từng đợt song song + xuất JPG đúng frame_preset."""
     ep_dir = storyboard_path.parent
     raw_dir = ep_dir / "raw_images"
     assets_dir = ep_dir / "assets"
     state_path = ep_dir / "pipeline_state.json"
     state = _load_full_pipeline_state(state_path, data)
+    eff_fp = resolve_frame_preset(override=frame_preset, storyboard_preset=data.get("frame_preset"))
+    aspect_plan = resolve_flow_aspect_plan(eff_fp, mode="images")
 
     # Bước A: Đồng bộ pipeline_state cho các cảnh đã có sẵn thành phẩm trong assets/
     state_dirty = False
@@ -1887,10 +2088,10 @@ def run_images_mode(
             sid = item.scene_id
             raw_png = raw_dir / f"{sid:03d}.png"
             dst_jpg = assets_dir / f"{sid:03d}.jpg"
-            _convert_png_to_jpg(raw_png, dst_jpg)
+            out_w, out_h = _convert_png_to_jpg(raw_png, dst_jpg, frame_preset=eff_fp.name)
             _update_scene_state(state, sid, image_status="done", video_status="skipped", error="")
             _save_pipeline_state_atomic(state_path, state)
-            print(f"[Cảnh {sid:03d}] Đã convert ảnh gốc sẵn có -> assets/{sid:03d}.jpg (0 tín dụng).")
+            print(f"[Cảnh {sid:03d}] Đã convert ảnh gốc sẵn có -> assets/{sid:03d}.jpg ({out_w}x{out_h}, 0 tín dụng).")
 
     runnable = [it for it in plan if it.action == "RUN"]
     if not runnable:
@@ -1907,7 +2108,11 @@ def run_images_mode(
     delay_sec = float(cfg.get("timeouts", {}).get("delay_between_scenes_sec", 4))
     sels = cfg["selectors"]
 
-    print(f"[IMAGES] Chế độ đồng loạt: {eff_conc} ảnh/đợt (tổng {len(runnable)} ảnh cần tạo, 0 tín dụng).", flush=True)
+    print(
+        f"[IMAGES] Chế độ đồng loạt: {eff_conc} ảnh/đợt (tổng {len(runnable)} ảnh, "
+        f"khung {eff_fp.name} → assets {eff_fp.inner_w}x{eff_fp.inner_h}, 0 tín dụng).",
+        flush=True,
+    )
 
     failed_count = 0
     queue: List[ScenePlanItem] = list(runnable)
@@ -1925,7 +2130,9 @@ def run_images_mode(
                 print(f"\n[IMAGES | ĐỢT {wave_idx}] Nộp {len(chunk)} cảnh {chunk_ids}...", flush=True)
 
                 try:
-                    _configure_image_mode(page, cfg, chunk[0].scene_id)
+                    selected_ui_aspect = _configure_image_mode(
+                        page, cfg, chunk[0].scene_id, aspect_plan=aspect_plan
+                    )
                 except SafetyAssertionError:
                     raise
 
@@ -1944,7 +2151,8 @@ def run_images_mode(
                 for pos, item in enumerate(chunk):
                     sid = item.scene_id
                     sc = item.scene_data
-                    prompt = str(sc.get("image_prompt", "")).strip()
+                    raw_prompt = str(sc.get("image_prompt", "")).strip()
+                    prompt = _augment_prompt_for_flow_aspect(raw_prompt, aspect_plan, selected_ui_aspect)
 
                     cur_txt = _get_visible_body_text(page)
                     q_lim = _detect_queue_limit(cur_txt, baseline_text)
@@ -2060,9 +2268,12 @@ def run_images_mode(
                             raise RuntimeError(f"Ảnh tải về quá nhỏ (<10KB): {raw_png}")
 
                         if asset_type == "static_image":
-                            _convert_png_to_jpg(raw_png, dst_jpg)
+                            out_w, out_h = _convert_png_to_jpg(raw_png, dst_jpg, frame_preset=eff_fp.name)
                             _update_scene_state(state, sid, image_status="done", video_status="skipped", error="")
-                            print(f"  ✓ Cảnh {sid:03d}: Đã lưu raw_images/{sid:03d}.png + assets/{sid:03d}.jpg", flush=True)
+                            print(
+                                f"  ✓ Cảnh {sid:03d}: Đã lưu raw_images/{sid:03d}.png + assets/{sid:03d}.jpg ({out_w}x{out_h})",
+                                flush=True,
+                            )
                         else:
                             _update_scene_state(state, sid, image_status="done", error="")
                             print(f"  ✓ Cảnh {sid:03d}: Đã lưu raw_images/{sid:03d}.png", flush=True)
@@ -2100,6 +2311,7 @@ def run_videos_mode(
     cdp_url: str,
     *,
     concurrency: Optional[int] = None,
+    frame_preset: Optional[str] = None,
 ) -> int:
     """Chế độ --mode videos: chạy cảnh flow_video (10 tín dụng/clip) theo đợt song song + xác minh khung đầu + FFmpeg mute."""
     ep_dir = storyboard_path.parent
@@ -2107,6 +2319,8 @@ def run_videos_mode(
     assets_dir = ep_dir / "assets"
     state_path = ep_dir / "pipeline_state.json"
     state = _load_full_pipeline_state(state_path, data)
+    eff_fp = resolve_frame_preset(override=frame_preset, storyboard_preset=data.get("frame_preset"))
+    aspect_plan = resolve_flow_aspect_plan(eff_fp, mode="videos")
 
     # Đồng bộ pipeline_state cho các cảnh flow_video đã có sẵn thành phẩm assets/*.mp4
     state_dirty = False
@@ -2176,7 +2390,7 @@ def run_videos_mode(
                 )
 
                 try:
-                    _configure_video_mode(page, cfg, chunk[0].scene_id)
+                    _configure_video_mode(page, cfg, chunk[0].scene_id, aspect_plan=aspect_plan)
                 except SafetyAssertionError:
                     raise
 
@@ -2433,6 +2647,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SELECTORS_PATH,
         help="Đường dẫn tới file flow_selectors.json.",
     )
+    parser.add_argument(
+        "--frame-preset",
+        type=str,
+        choices=VALID_FRAME_PRESETS,
+        default=None,
+        help="Ghi đè frame_preset từ storyboard.json (portrait_9_16 | framed_4_5 | framed_1_1 | landscape_16_9).",
+    )
     return parser
 
 
@@ -2467,6 +2688,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"[ABORT] Các cảnh không tồn tại trong storyboard: {unknown}")
             return 1
 
+    eff_fp = resolve_frame_preset(override=args.frame_preset, storyboard_preset=data.get("frame_preset"))
+
     # 2. Lập kế hoạch thực thi
     ep_dir = storyboard_path.parent
     plan = _build_execution_plan(
@@ -2482,6 +2705,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         args.mode,
         plan,
         dry_run=args.dry_run,
+        frame_preset=eff_fp.name,
     )
 
     eff_conc = _resolve_concurrency(cfg, args.mode, args.concurrency)
@@ -2509,8 +2733,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     # 5. Chạy thật trên Chrome CDP
     try:
         if args.mode == "images":
-            return run_images_mode(storyboard_path, data, plan, cfg, cdp_url, concurrency=args.concurrency)
-        return run_videos_mode(storyboard_path, data, plan, cfg, cdp_url, concurrency=args.concurrency)
+            return run_images_mode(
+                storyboard_path,
+                data,
+                plan,
+                cfg,
+                cdp_url,
+                concurrency=args.concurrency,
+                frame_preset=eff_fp.name,
+            )
+        return run_videos_mode(
+            storyboard_path,
+            data,
+            plan,
+            cfg,
+            cdp_url,
+            concurrency=args.concurrency,
+            frame_preset=eff_fp.name,
+        )
     except SafetyAssertionError as se:
         print(f"\n🛑 {se}")
         return 2

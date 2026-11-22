@@ -50,12 +50,13 @@ REQUEST_TIMEOUT = 25
 ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp"}
 ALLOWED_VIDEO_EXTS = {".mp4", ".webm", ".ogv", ".mov"}
+CANDIDATE_MAX_LONG_EDGE = 1600
 
 # Bộ lọc chống logo đài truyền hình, watermark stock thương mại và file biểu tượng UI
 FORBIDDEN_MEDIA_RE = re.compile(
     r"(?:\b(?:vtv[1-9]?|ina|getty\s*images?|shutterstock|istockphoto|alamy|corbis|"
     r"reuters|ap\s*photo|ap\s*archive|associated\s*press|british\s*path[eé]|"
-    r"afp\s*photo|pond5|dreamstime|123rf|all\s*rights\s*reserved)\b|"
+    r"afp\s*photo|pond5|dreamstime|123rf|periscope\s*film|all\s*rights\s*reserved)\b|"
     r"watermark|©\s*(?:vtv|ina|reuters|ap|afp|getty))",
     re.IGNORECASE,
 )
@@ -64,6 +65,49 @@ UI_ICON_TITLE_RE = re.compile(
     r"(?:commons-logo|wiki[^a-z]*logo|nuvola|crystal_clear|flag_icon|stub[_ ]?icon|ambox_)",
     re.IGNORECASE,
 )
+
+ARCHIVAL_OVERRIDE_RE = re.compile(
+    r"\b(?:contemporary\s+photo(?:graph)?|archival|archive|archived|historical\s+photo(?:graph)?|wartime\s+photo(?:graph)?)\b",
+    re.IGNORECASE,
+)
+HISTORICAL_YEAR_RE = re.compile(r"\b19[4-7]\d\b")
+PUBLIC_DOMAIN_RE = re.compile(r"(?:\bpublic\s+domain\b|\bpd[-_\s])", re.IGNORECASE)
+
+MODERN_SITE_RE = re.compile(
+    r"\b(?:souvenirs?|fabrics?\s+on\s+display|tourists?|memorials?|monuments?|statues?|wax\s+figures?|dioramas?|gift\s+shops?)\b",
+    re.IGNORECASE,
+)
+PANORAMA_BUNKER_RE = re.compile(r"panorama\s+of\b[^|\n]{0,100}\bbunker\b", re.IGNORECASE)
+INTERIOR_OF_RE = re.compile(r"\binterior\s+of\b", re.IGNORECASE)
+MODERN_YEAR_RE = re.compile(r"\b20(?:1\d|2\d)\b")
+
+
+def is_modern_tourist_or_site_media(
+    title: str,
+    description: str = "",
+    year_or_date: str = "",
+    license_str: str = "",
+) -> Tuple[bool, str]:
+    """Nhận diện ảnh du lịch/bảo tàng/di tích chụp hiện đại nhưng vẫn giữ qua ảnh gốc lưu trữ."""
+    title_desc = f"{title} {description}".strip()
+    all_with_year = f"{title_desc} {year_or_date}".strip()
+
+    if ARCHIVAL_OVERRIDE_RE.search(title_desc):
+        return False, ""
+    if HISTORICAL_YEAR_RE.search(all_with_year):
+        return False, ""
+    if PUBLIC_DOMAIN_RE.search(license_str or ""):
+        return False, ""
+
+    m_mod = MODERN_SITE_RE.search(title_desc)
+    if m_mod:
+        return True, f"Ảnh di tích/du lịch hiện đại ('{m_mod.group(0)}')"
+    m_pan = PANORAMA_BUNKER_RE.search(title_desc)
+    if m_pan:
+        return True, f"Ảnh toàn cảnh hầm/di tích hiện đại ('{m_pan.group(0)}')"
+    if INTERIOR_OF_RE.search(title_desc) and MODERN_YEAR_RE.search(all_with_year):
+        return True, "Ảnh nội thất chụp hiện đại (201x/202x)"
+    return False, ""
 
 
 def _find_media_binary(name: str) -> str:
@@ -234,6 +278,67 @@ def _load_pil_font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
+def _normalize_candidate_jpeg(
+    src_path: Path,
+    *,
+    max_long_edge: int = CANDIDATE_MAX_LONG_EDGE,
+    quality: int = 90,
+) -> Tuple[Optional[Path], Tuple[int, int], str]:
+    """Chuẩn hóa ảnh ứng viên/contact sheet sang RGB JPEG sạch (<= max_long_edge), tự xóa nếu rỗng/lỗi."""
+    if not src_path.is_file() or src_path.stat().st_size == 0:
+        src_path.unlink(missing_ok=True)
+        return None, (0, 0), "File rỗng hoặc không tồn tại"
+
+    dst_jpg = src_path.with_suffix(".jpg")
+    tmp_jpg = dst_jpg.with_name(f".{dst_jpg.stem}_norm_tmp.jpg")
+    replaced = False
+
+    try:
+        with Image.open(src_path) as img:
+            img.load()
+            img = ImageOps.exif_transpose(img)
+            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                rgba = img.convert("RGBA")
+                bg = Image.new("RGB", rgba.size, (255, 255, 255))
+                bg.paste(rgba, mask=rgba.getchannel("A"))
+                rgb = bg
+            else:
+                rgb = img.convert("RGB")
+
+            if max(rgb.size) > max_long_edge:
+                rgb.thumbnail((max_long_edge, max_long_edge), Image.Resampling.LANCZOS)
+
+            w, h = rgb.size
+            if w <= 0 or h <= 0:
+                raise ValueError("Kích thước ảnh không hợp lệ")
+
+            rgb.save(tmp_jpg, format="JPEG", quality=quality, optimize=True)
+
+        if not tmp_jpg.is_file() or tmp_jpg.stat().st_size == 0:
+            raise ValueError("File JPEG chuẩn hóa đầu ra rỗng")
+
+        with Image.open(tmp_jpg) as verify_img:
+            verify_img.verify()
+        with Image.open(tmp_jpg) as check_img:
+            check_img.load()
+            if check_img.format != "JPEG" or check_img.mode != "RGB" or check_img.size != (w, h) or max(check_img.size) > max_long_edge:
+                raise ValueError(
+                    f"JPEG sau chuẩn hóa không khớp thông số (format={check_img.format}, mode={check_img.mode}, size={check_img.size})"
+                )
+
+        os.replace(tmp_jpg, dst_jpg)
+        replaced = True
+        if src_path.resolve() != dst_jpg.resolve():
+            src_path.unlink(missing_ok=True)
+        return dst_jpg, (w, h), ""
+    except Exception as e:
+        tmp_jpg.unlink(missing_ok=True)
+        src_path.unlink(missing_ok=True)
+        if dst_jpg != src_path and (replaced or (dst_jpg.is_file() and dst_jpg.stat().st_size == 0)):
+            dst_jpg.unlink(missing_ok=True)
+        return None, (0, 0), str(e)
+
+
 # ------------------------------------------------------------------ Wikimedia Commons Search
 def _search_wikimedia(
     session: requests.Session,
@@ -241,6 +346,7 @@ def _search_wikimedia(
     *,
     filetype: str,
     limit: int,
+    exclude_modern: bool = True,
 ) -> List[Dict[str, Any]]:
     """Truy vấn Wikimedia Commons API với nhiều từ khóa Việt/Anh/Pháp, khử trùng URL/pageid."""
     collected: List[Dict[str, Any]] = []
@@ -299,6 +405,12 @@ def _search_wikimedia(
                 print(f"   ⏭️ Bỏ qua '{title}': {reason}")
                 continue
 
+            if exclude_modern:
+                is_mod, mod_reason = is_modern_tourist_or_site_media(title, desc, date_orig, license_str)
+                if is_mod:
+                    print(f"   ⏭️ Bỏ qua '{title}' (--exclude-modern): {mod_reason}")
+                    continue
+
             dedup_key = str(info.get("sha1") or url)
             if dedup_key in seen_keys:
                 continue
@@ -335,7 +447,13 @@ def run_mode_images(args: argparse.Namespace) -> int:
 
     out_dir = _resolve_candidates_dir(args, "images")
     session = _make_session()
-    raw_items = _search_wikimedia(session, queries, filetype="bitmap", limit=args.limit)
+    raw_items = _search_wikimedia(
+        session,
+        queries,
+        filetype="bitmap",
+        limit=args.limit,
+        exclude_modern=getattr(args, "exclude_modern", True),
+    )
 
     accepted: List[Dict[str, Any]] = []
     seen_sha256: set[str] = set()
@@ -367,29 +485,42 @@ def run_mode_images(args: argparse.Namespace) -> int:
             print(f"   ⚠️ Lỗi tải '{item['title']}': {err}")
             continue
 
-        sha256 = _sha256_file(dest)
-        if sha256 in seen_sha256:
+        if not dest.is_file() or dest.stat().st_size == 0:
             dest.unlink(missing_ok=True)
+            print(f"   ⚠️ Bỏ qua '{item['title']}': file tải về rỗng 0 byte")
+            continue
+
+        try:
+            with Image.open(dest) as orig_img:
+                orig_img.load()
+                orig_w, orig_h = ImageOps.exif_transpose(orig_img).size
+        except Exception as e:
+            dest.unlink(missing_ok=True)
+            print(f"   ⚠️ Bỏ qua '{item['title']}': file ảnh lỗi ({e})")
+            continue
+
+        if max(orig_w, orig_h) < args.min_long_edge:
+            dest.unlink(missing_ok=True)
+            continue
+
+        norm_path, (w, h), norm_err = _normalize_candidate_jpeg(dest, max_long_edge=CANDIDATE_MAX_LONG_EDGE)
+        if norm_path is None:
+            print(f"   ⚠️ Bỏ qua '{item['title']}': lỗi chuẩn hóa RGB JPEG ({norm_err})")
+            continue
+
+        sha256 = _sha256_file(norm_path)
+        if sha256 in seen_sha256:
+            norm_path.unlink(missing_ok=True)
             continue
         seen_sha256.add(sha256)
 
-        try:
-            with Image.open(dest) as img:
-                w, h = img.size
-                img.verify()
-        except Exception:
-            dest.unlink(missing_ok=True)
-            continue
-
-        if max(w, h) < args.min_long_edge:
-            dest.unlink(missing_ok=True)
-            continue
-
         item["width"], item["height"] = w, h
+        item["ext"] = ".jpg"
+        item["mime"] = "image/jpeg"
         item["sha256"] = sha256
-        item["saved_file"] = fname
+        item["saved_file"] = norm_path.name
         accepted.append(item)
-        print(f"✓ IMG #{idx}: {fname} ({w}x{h} | {item['license']} | tác giả: {item['author'][:40]})")
+        print(f"✓ IMG #{idx}: {norm_path.name} ({w}x{h} | {item['license']} | tác giả: {item['author'][:40]})")
 
     _write_candidates_manifest(out_dir, accepted, queries=queries, dry_run=args.dry_run, kind="images")
     print(f"\n📂 Đã lưu {len(accepted)} ứng viên ảnh tại: {out_dir}")
@@ -572,6 +703,7 @@ def create_video_contact_sheet(
     draw.text((pad, 60), f"License: {lic_str}", fill=(140, 230, 175), font=font_sub)
 
     tmp_frames: List[Path] = []
+    valid_frames = 0
     try:
         for idx, frac in enumerate(fracs):
             ts = max(0.0, min(max(0.0, dur - 0.15), dur * frac))
@@ -594,13 +726,17 @@ def create_video_contact_sheet(
             y0 = header_h + pad + row * (tile_h + pad)
             draw.rectangle([x0, y0, x0 + tile_w, y0 + tile_h], fill=(10, 11, 14), outline=(70, 76, 88))
 
-            if frame_jpg.is_file():
-                with Image.open(frame_jpg) as f_img:
-                    rgb = f_img.convert("RGB")
-                    rgb.thumbnail((tile_w, tile_h), Image.Resampling.LANCZOS)
-                    px = x0 + (tile_w - rgb.width) // 2
-                    py = y0 + (tile_h - rgb.height) // 2
-                    sheet.paste(rgb, (px, py))
+            if frame_jpg.is_file() and frame_jpg.stat().st_size > 0:
+                try:
+                    with Image.open(frame_jpg) as f_img:
+                        rgb = ImageOps.exif_transpose(f_img).convert("RGB")
+                        rgb.thumbnail((tile_w, tile_h), Image.Resampling.LANCZOS)
+                        px = x0 + (tile_w - rgb.width) // 2
+                        py = y0 + (tile_h - rgb.height) // 2
+                        sheet.paste(rgb, (px, py))
+                        valid_frames += 1
+                except Exception:
+                    pass
 
             mm = int(ts // 60)
             ss = ts - mm * 60
@@ -608,11 +744,24 @@ def create_video_contact_sheet(
             draw.rectangle([x0 + 6, y0 + tile_h - 30, x0 + 162, y0 + tile_h - 6], fill=(0, 0, 0))
             draw.text((x0 + 12, y0 + tile_h - 26), label, fill=(255, 235, 90), font=font_badge)
 
+        if valid_frames == 0:
+            out_jpg.unlink(missing_ok=True)
+            return None
+
         sheet.save(out_jpg, format="JPEG", quality=92)
+        norm_path, _, norm_err = _normalize_candidate_jpeg(out_jpg, max_long_edge=CANDIDATE_MAX_LONG_EDGE, quality=90)
+        if norm_path is None:
+            print(f"⚠️ Lỗi chuẩn hóa contact sheet '{out_jpg.name}': {norm_err}", file=sys.stderr)
+            out_jpg.unlink(missing_ok=True)
+            return None
+        return norm_path
+    except Exception as e:
+        print(f"⚠️ Lỗi tạo contact sheet '{out_jpg.name}': {e}", file=sys.stderr)
+        out_jpg.unlink(missing_ok=True)
+        return None
     finally:
         for f in tmp_frames:
             f.unlink(missing_ok=True)
-    return out_jpg
 
 
 def run_mode_videos(args: argparse.Namespace) -> int:
@@ -628,7 +777,13 @@ def run_mode_videos(args: argparse.Namespace) -> int:
     if args.sources in ("all", "archive"):
         raw_items.extend(_search_internet_archive_videos(session, queries, limit=args.limit, max_bytes=max_bytes))
     if args.sources in ("all", "wikimedia"):
-        wm_vids = _search_wikimedia(session, queries, filetype="video", limit=args.limit)
+        wm_vids = _search_wikimedia(
+            session,
+            queries,
+            filetype="video",
+            limit=args.limit,
+            exclude_modern=getattr(args, "exclude_modern", True),
+        )
         for v in wm_vids:
             if v["ext"] in ALLOWED_VIDEO_EXTS and (v["size_bytes"] <= max_bytes or v["size_bytes"] == 0):
                 raw_items.append(v)
@@ -743,8 +898,13 @@ def _lookup_candidate_meta(src_file: Path) -> Dict[str, Any]:
         return {}
     try:
         data = json.loads(cand_json.read_text(encoding="utf-8"))
-        for it in data.get("items") or []:
+        items = data.get("items") or []
+        for it in items:
             if it.get("saved_file") == src_file.name:
+                return dict(it)
+        for it in items:
+            saved_name = str(it.get("saved_file") or "").strip()
+            if saved_name and Path(saved_name).stem == src_file.stem:
                 return dict(it)
     except Exception:
         pass
@@ -794,8 +954,25 @@ def run_mode_commit_image(args: argparse.Namespace) -> int:
     assets_dir.mkdir(parents=True, exist_ok=True)
     out_jpg = assets_dir / f"{args.scene:03d}.jpg"
 
+    crop_margins_raw = str(getattr(args, "crop_margins", "") or "").strip()
     with Image.open(src) as img:
         rgb = ImageOps.exif_transpose(img).convert("RGB")
+        if crop_margins_raw:
+            parts = [p.strip() for p in crop_margins_raw.split(",")]
+            if len(parts) != 4:
+                raise ValueError(f"--crop-margins phải có dạng L,T,R,B (nhận: '{crop_margins_raw}')")
+            try:
+                ml, mt, mr, mb = (int(v) for v in parts)
+            except ValueError as exc:
+                raise ValueError(f"--crop-margins phải là 4 số nguyên L,T,R,B (nhận: '{crop_margins_raw}')") from exc
+            if min(ml, mt, mr, mb) < 0:
+                raise ValueError(f"--crop-margins không chấp nhận giá trị âm: '{crop_margins_raw}'")
+            w0, h0 = rgb.size
+            if ml + mr >= w0 - 64 or mt + mb >= h0 - 64:
+                raise ValueError(
+                    f"--crop-margins={crop_margins_raw} vượt quá vùng hợp lệ của ảnh {w0}x{h0}"
+                )
+            rgb = rgb.crop((ml, mt, w0 - mr, h0 - mb))
         # Giữ nguyên tỉ lệ tự nhiên cho Ken Burns, chỉ thu gọn nếu vượt quá 3840px để tối ưu dung lượng
         if max(rgb.size) > 3840:
             rgb.thumbnail((3840, 3840), Image.Resampling.LANCZOS)
@@ -813,6 +990,7 @@ def run_mode_commit_image(args: argparse.Namespace) -> int:
         "year_or_date": meta.get("year_or_date") or "",
         "license": meta.get("license") or "Verified Public Domain / Open License",
         "source_url": meta.get("page_url") or meta.get("url") or "",
+        "crop_margins": crop_margins_raw,
         "resolution": f"{w}x{h}",
         "sha256": _sha256_file(out_jpg),
         "note": getattr(args, "note", "") or "",
@@ -977,6 +1155,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sources", choices=["all", "archive", "wikimedia"], default="all", help="Nguồn video: all / archive / wikimedia.")
     p.add_argument("--no-contact-sheet", action="store_true", help="Tắt tự động tạo lưới ảnh xem trước 6 khung hình.")
     p.add_argument("--dry-run", action="store_true", help="Chỉ truy vấn metadata kiểm tra nguồn & giấy phép, không tải file media.")
+    mod_group = p.add_mutually_exclusive_group()
+    mod_group.add_argument(
+        "--exclude-modern",
+        dest="exclude_modern",
+        action="store_true",
+        help="Lọc bỏ ảnh du lịch/tượng đài/di tích chụp hiện đại (mặc định bật cho sử cận/hiện đại; vẫn giữ ảnh lưu trữ gốc).",
+    )
+    mod_group.add_argument(
+        "--include-sites",
+        dest="exclude_modern",
+        action="store_false",
+        help="Tắt lọc ảnh di tích/bảo tàng hiện đại (dùng khi làm chủ đề sử cổ đại, di tích, hiện vật).",
+    )
+    p.set_defaults(exclude_modern=True)
 
     # Tham số commit-image & commit-video
     p.add_argument("--input", help="Đường dẫn ảnh hoặc video ứng viên đã duyệt.")
@@ -984,6 +1176,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--start", type=float, default=0.0, help="Mốc bắt đầu cắt video theo giây (mặc định: 0.0).")
     p.add_argument("--duration", type=float, default=6.0, help="Độ dài đoạn video cần cắt theo giây (mặc định: 6.0).")
     p.add_argument("--no-crop-black-bars", action="store_true", help="Tắt tự động dò cắt viền đen ở chế độ commit-video.")
+    p.add_argument("--crop-margins", help="Cắt lề ảnh theo pixel dạng L,T,R,B trước khi lưu commit-image (vd: cắt viền trắng bản scan).")
     p.add_argument("--source-url", help="Ghi đè URL nguồn tư liệu trong archive_sources.json.")
     p.add_argument("--license", help="Ghi đè tên giấy phép trong archive_sources.json.")
     p.add_argument("--author", help="Ghi đè tên tác giả/nhà lưu trữ trong archive_sources.json.")

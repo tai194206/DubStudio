@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 from dotenv import load_dotenv, set_key
 
+from core.frame_presets import VALID_FRAME_PRESET_SETTINGS
 from core.style_presets import FALLBACK_MODELS, STYLE_PRESETS
 
 APP_NAME = "DubStudio"
@@ -88,6 +89,7 @@ class DubSettings:
     keep_temp: bool = False
 
     # Cấu hình Story Studio 9:16 (v3.2)
+    story_frame_preset: str = "auto"            # auto | portrait_9_16 | framed_4_5 | framed_1_1 | landscape_16_9
     story_shot_mode: str = "planned"            # planned | scene
     story_transition: str = "fade"              # none | fade | dissolve | smoothleft | wipeleft
     story_transition_duration: float = 0.25     # giây (0.15 - 0.50)
@@ -122,7 +124,11 @@ class DubSettings:
             raw_aai = "medium" if self.story_anti_ai else "off"
         elif not self.story_anti_ai and raw_aai == "medium":
             raw_aai = "off"
+        raw_fp = str(self.story_frame_preset or "auto").strip().lower()
+        if raw_fp not in VALID_FRAME_PRESET_SETTINGS:
+            raw_fp = "auto"
         return {
+            "frame_preset": raw_fp,
             "burn_subtitles": bool(self.story_burn_subs),
             "codec": self.story_codec or "h264",
             "bgm_volume": max(0.0, min(1.0, float(self.story_bgm_volume))),
@@ -163,6 +169,8 @@ class DubSettings:
             elif s.story_anti_ai_level not in VALID_ANTI_AI_LEVELS:
                 s.story_anti_ai_level = "medium" if bool(s.story_anti_ai) else "off"
             s.story_anti_ai = s.story_anti_ai_level != "off"
+            raw_fp = str(getattr(s, "story_frame_preset", "auto") or "auto").strip().lower()
+            s.story_frame_preset = raw_fp if raw_fp in VALID_FRAME_PRESET_SETTINGS else "auto"
         except (OSError, ValueError):
             pass
         return s

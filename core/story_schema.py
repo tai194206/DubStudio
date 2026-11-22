@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from .errors import DubberError
+from .frame_presets import DEFAULT_FRAME_PRESET, normalize_frame_preset
 from .sfx_engine import SFX_VALID_TAGS
 
 VALID_MOTIONS = {"zoom_in", "zoom_out", "pan_left", "pan_right", "static"}
@@ -128,6 +129,7 @@ class Storyboard:
     title: str
     version: str = "1.0"
     aspect_ratio: str = "9:16"
+    frame_preset: str = DEFAULT_FRAME_PRESET
     total_words: int = 0
     style_prefix: str = ""
     character_bible: str = ""
@@ -142,6 +144,7 @@ class Storyboard:
         self.title = str(self.title).strip()
         self.version = str(self.version).strip() or "1.0"
         self.aspect_ratio = str(self.aspect_ratio).strip() or "9:16"
+        self.frame_preset = normalize_frame_preset(self.frame_preset, allow_auto=False)
         self.style_prefix = str(self.style_prefix).strip()
         self.character_bible = str(self.character_bible).strip()
         self.full_script_for_elevenlabs = str(self.full_script_for_elevenlabs).strip()
@@ -232,6 +235,7 @@ class Storyboard:
             "version": self.version,
             "title": self.title,
             "aspect_ratio": self.aspect_ratio,
+            "frame_preset": self.frame_preset,
             "total_words": self.total_words,
             "style_prefix": self.style_prefix,
             "character_bible": self.character_bible,
@@ -275,6 +279,7 @@ class Storyboard:
             title=data.get("title", "Untitled Story"),
             version=str(data.get("version", "1.0")),
             aspect_ratio=data.get("aspect_ratio", "9:16"),
+            frame_preset=data.get("frame_preset", DEFAULT_FRAME_PRESET),
             total_words=total_w,
             style_prefix=data.get("style_prefix", ""),
             character_bible=data.get("character_bible", ""),
