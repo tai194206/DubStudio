@@ -5,6 +5,13 @@
     "flow.google.com",
     "labs.google"
   ],
+  "supported_aspects": [
+    "16:9",
+    "4:3",
+    "1:1",
+    "3:4",
+    "9:16"
+  ],
   "image_mode": {
     "tab_label": "Hình ảnh",
     "aspect_label": "9:16",
@@ -26,11 +33,11 @@
       "button:has-text('Nano Banana')",
       "button:has-text('Veo')",
       "button:has-text('Video')",
-      "button:has-text('9:16')",
       "button:has-text('16:9')",
-      "button:has-text('4:5')",
-      "button:has-text('3:4')",
+      "button:has-text('4:3')",
       "button:has-text('1:1')",
+      "button:has-text('3:4')",
+      "button:has-text('9:16')",
       "button[aria-label*='Cài đặt' i]",
       "button[aria-label*='Settings' i]"
     ],

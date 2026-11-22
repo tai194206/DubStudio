@@ -31,6 +31,7 @@ if str(REPO_ROOT) not in sys.path:
 from core.frame_presets import (  # noqa: E402
     DEFAULT_FRAME_PRESET,
     VALID_FRAME_PRESETS,
+    get_frame_preset,
     resolve_frame_preset,
 )
 
@@ -130,9 +131,9 @@ def _run_validate(storyboard_path: Path, *, sync_files: bool) -> int:
     return _run_subprocess(cmd)
 
 
-def _read_policy_errors(ep_dir: Path) -> Tuple[List[int], List[int]]:
-    """Trả về (image_policy_error_ids, video_policy_error_ids) từ pipeline_state.json."""
-    st = _load_json_safe(ep_dir / "pipeline_state.json")
+def _read_policy_errors(ep_dir: Path, state_path: Optional[Path] = None) -> Tuple[List[int], List[int]]:
+    """Trả về (image_policy_error_ids, video_policy_error_ids) từ pipeline_state*.json."""
+    st = _load_json_safe(state_path or (ep_dir / "pipeline_state.json"))
     img_err: List[int] = []
     vid_err: List[int] = []
     if not st or not isinstance(st.get("scenes"), list):
@@ -147,17 +148,64 @@ def _read_policy_errors(ep_dir: Path) -> Tuple[List[int], List[int]]:
     return sorted(img_err), sorted(vid_err)
 
 
+def _resolve_episode_io(
+    ep_dir: Path,
+    data: Dict[str, Any],
+    *,
+    frame_preset: Optional[str] = None,
+    youtube_16x9: bool = False,
+    assets_dir: Optional[Path] = None,
+    raw_dir: Optional[Path] = None,
+) -> Tuple[Any, Path, Path, Path]:
+    """Xác định frame_preset và thư mục song song (`assets/` vs `assets_16x9/`)."""
+    def _sub(cand: Optional[Path], default_name: str) -> Path:
+        if cand is None:
+            return ep_dir / default_name
+        return cand if cand.is_absolute() else (ep_dir / cand)
+
+    if youtube_16x9:
+        eff_fp = get_frame_preset("landscape_16_9")
+        eff_assets = _sub(assets_dir, "assets_16x9")
+        eff_raw = _sub(raw_dir, "raw_images_16x9")
+        state_path = ep_dir / "pipeline_state_16x9.json"
+        return eff_fp, eff_assets, eff_raw, state_path
+
+    eff_fp = resolve_frame_preset(override=frame_preset, storyboard_preset=data.get("frame_preset"))
+    eff_assets = _sub(assets_dir, "assets")
+    eff_raw = _sub(raw_dir, "raw_images")
+    state_path = ep_dir / "pipeline_state.json"
+    return eff_fp, eff_assets, eff_raw, state_path
+
+
+def _has_video_start_frame(sid: int, raw_dir: Path, assets_dir: Path, *, youtube_16x9: bool) -> bool:
+    if youtube_16x9:
+        for d, exts in ((assets_dir, (".jpg", ".jpeg", ".png", ".webp")), (raw_dir, (".png", ".jpg", ".jpeg", ".webp"))):
+            for ext in exts:
+                if _file_ok(d / f"{sid:03d}{ext}", MIN_IMAGE_BYTES):
+                    return True
+        return False
+    return _file_ok(raw_dir / f"{sid:03d}.png", MIN_IMAGE_BYTES)
+
+
 def inspect_episode_status(
     ep_dir: Path,
     data: Dict[str, Any],
     *,
     selected_ids: Optional[Set[int]] = None,
     frame_preset: Optional[str] = None,
+    youtube_16x9: bool = False,
+    assets_dir: Optional[Path] = None,
+    raw_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Quét toàn bộ hiện trạng assets/, raw_images/, pipeline_state.json của tập phim."""
-    eff_fp = resolve_frame_preset(override=frame_preset, storyboard_preset=data.get("frame_preset"))
-    assets_dir = ep_dir / "assets"
-    raw_dir = ep_dir / "raw_images"
+    """Quét toàn bộ hiện trạng assets*/raw_images*/pipeline_state*.json của tập phim."""
+    eff_fp, eff_assets, eff_raw, state_path = _resolve_episode_io(
+        ep_dir,
+        data,
+        frame_preset=frame_preset,
+        youtube_16x9=youtube_16x9,
+        assets_dir=assets_dir,
+        raw_dir=raw_dir,
+    )
     scenes: List[Dict[str, Any]] = data.get("scenes", [])
 
     done_assets: List[int] = []
@@ -174,8 +222,8 @@ def inspect_episode_status(
 
         asset_type = str(sc.get("asset_type", "static_image"))
         target_name = _resolve_target_asset_filename(data, idx, sc)
-        target_path = assets_dir / target_name
-        raw_png = raw_dir / f"{sid:03d}.png"
+        target_path = eff_assets / target_name
+        raw_png = eff_raw / f"{sid:03d}.png"
         min_bytes = MIN_VIDEO_BYTES if asset_type == "flow_video" else MIN_JPG_BYTES
 
         has_final = _file_ok(target_path, min_bytes)
@@ -183,20 +231,20 @@ def inspect_episode_status(
 
         # Cảnh báo lệch đuôi thông minh (vd: JSON khai static_image .jpg nhưng assets/ lại có .mp4)
         if asset_type == "static_image":
-            alt_mp4 = assets_dir / f"{sid:03d}.mp4"
+            alt_mp4 = eff_assets / f"{sid:03d}.mp4"
             if _file_ok(alt_mp4, MIN_VIDEO_BYTES):
                 sz_mb = alt_mp4.stat().st_size / (1024 * 1024)
                 ext_notices.append(
                     f"[NOTICE] Cảnh {sid:03d}: storyboard khai báo 'static_image' ({target_name}), "
-                    f"nhưng trong assets/ đang có sẵn file video '{alt_mp4.name}' ({sz_mb:.2f} MB). "
+                    f"nhưng trong {eff_assets.name}/ đang có sẵn file video '{alt_mp4.name}' ({sz_mb:.2f} MB). "
                     f"Hãy kiểm tra lại nếu muốn giữ clip MP4 này hoặc đổi sang ảnh JPG."
                 )
         elif asset_type == "flow_video" and not has_final:
-            alt_jpg = assets_dir / f"{sid:03d}.jpg"
+            alt_jpg = eff_assets / f"{sid:03d}.jpg"
             if _file_ok(alt_jpg, MIN_JPG_BYTES):
                 ext_notices.append(
                     f"[NOTICE] Cảnh {sid:03d}: storyboard khai báo 'flow_video' ({target_name}), "
-                    f"hiện chưa có MP4 nhưng trong assets/ lại có '{alt_jpg.name}'."
+                    f"hiện chưa có MP4 nhưng trong {eff_assets.name}/ lại có '{alt_jpg.name}'."
                 )
 
         if has_final:
@@ -210,11 +258,19 @@ def inspect_episode_status(
             else:
                 pending_static_images.append(sid)
 
-    img_policy_err, vid_policy_err = _read_policy_errors(ep_dir)
-    audio_mp3 = assets_dir / "full_audio.mp3"
-    audio_wav = assets_dir / "full_audio.wav"
-    has_audio = audio_mp3.is_file() or audio_wav.is_file()
-    audio_name = audio_mp3.name if audio_mp3.is_file() else (audio_wav.name if audio_wav.is_file() else "")
+    img_policy_err, vid_policy_err = _read_policy_errors(ep_dir, state_path=state_path)
+    # Giọng đọc luôn dùng chung từ assets/full_audio.mp3 (fallback sang eff_assets)
+    has_audio = False
+    audio_name = ""
+    for cand_dir in (ep_dir / "assets", eff_assets):
+        for fname in ("full_audio.mp3", "full_audio.wav"):
+            p = cand_dir / fname
+            if p.is_file():
+                has_audio = True
+                audio_name = f"{cand_dir.name}/{fname}"
+                break
+        if has_audio:
+            break
 
     total_checked = len(done_assets) + len(missing_assets)
     rem_credits = len(pending_flow_videos) * 10
@@ -228,6 +284,9 @@ def inspect_episode_status(
 
     return {
         "frame_preset": eff_fp.name,
+        "youtube_16x9": bool(youtube_16x9),
+        "assets_dir_name": eff_assets.name,
+        "raw_dir_name": eff_raw.name,
         "inner_size": f"{eff_fp.inner_w}x{eff_fp.inner_h}",
         "out_size": f"{eff_fp.out_w}x{eff_fp.out_h}",
         "total_scenes": total_checked,
@@ -247,6 +306,8 @@ def inspect_episode_status(
 
 
 def print_check_summary(ep_dir: Path, info: Dict[str, Any]) -> None:
+    assets_lbl = info.get("assets_dir_name", "assets")
+    raw_lbl = info.get("raw_dir_name", "raw_images")
     print("\n" + "=" * 84)
     print(f"BÁO CÁO ĐỐI CHIẾU TÀI NGUYÊN TẬP: {ep_dir.name}")
     print(f"Thư mục: {ep_dir}")
@@ -256,27 +317,45 @@ def print_check_summary(ep_dir: Path, info: Dict[str, Any]) -> None:
         f"(assets {info.get('inner_size', '1080x1920')} → xuất {info.get('out_size', '1080x1920')})"
     )
     print(f"  Tổng số cảnh kiểm tra        : {info['total_scenes']}")
-    print(f"  Đã có thành phẩm (assets/)   : {len(info['done_assets'])}/{info['total_scenes']}  {info['done_assets'] if info['done_assets'] else '[]'}")
+    print(f"  Đã có thành phẩm ({assets_lbl}/): {len(info['done_assets'])}/{info['total_scenes']}  {info['done_assets'] if info['done_assets'] else '[]'}")
     print(f"  Còn thiếu thành phẩm cuối    : {len(info['missing_assets'])}  {info['missing_assets'] if info['missing_assets'] else '[]'}")
     print(f"    - flow_video chưa có .mp4  : {len(info['pending_flow_videos'])}  {info['pending_flow_videos'] if info['pending_flow_videos'] else '[]'}")
     print(f"    - static_image chưa có .jpg: {len(info['pending_static_images'])}  {info['pending_static_images'] if info['pending_static_images'] else '[]'}")
-    print(f"  Còn thiếu ảnh gốc (raw_images): {len(info['missing_raw'])}  {info['missing_raw'] if info['missing_raw'] else '[]'}")
+    print(f"  Còn thiếu ảnh gốc ({raw_lbl}): {len(info['missing_raw'])}  {info['missing_raw'] if info['missing_raw'] else '[]'}")
     print(f"  Lỗi Policy (ảnh / video)     : {info['img_policy_errors']} / {info['vid_policy_errors']}")
     if info["has_audio"]:
-        print(f"  Âm thanh full_audio          : ✓ Đã có assets/{info['audio_name']}")
+        print(f"  Âm thanh full_audio          : ✓ Đã có {info['audio_name']}")
     else:
         print("  Âm thanh full_audio          : ✗ CHƯA CÓ assets/full_audio.mp3 → hãy lấy elevenlabs.txt đi tạo voice!")
     print(f"  Tín dụng Veo 3.1 còn cần     : {info['remaining_credits']} tín dụng ({len(info['pending_flow_videos'])} clip x 10)")
 
     if info["ext_notices"]:
         print("\n" + "-" * 84)
-        print("CẢNH BÁO LỆCH ĐUÔI FILE TRONG assets/:")
+        print(f"CẢNH BÁO LỆCH ĐUÔI FILE TRONG {assets_lbl}/:")
         for n in info["ext_notices"]:
             print(f"  {n}")
 
     print("\n" + "=" * 84)
     print(f"TRẠNG THÁI TẬP PHIM: {info['status_label']}")
     print("=" * 84)
+
+
+def _append_io_flags(
+    cmd: List[str],
+    *,
+    frame_preset: Optional[str] = None,
+    youtube_16x9: bool = False,
+    assets_dir: Optional[Path] = None,
+    raw_dir: Optional[Path] = None,
+) -> None:
+    if frame_preset:
+        cmd.extend(["--frame-preset", frame_preset])
+    if youtube_16x9:
+        cmd.append("--youtube-16x9")
+    if assets_dir is not None:
+        cmd.extend(["--assets-dir", str(assets_dir)])
+    if raw_dir is not None:
+        cmd.extend(["--raw-dir", str(raw_dir)])
 
 
 def run_phase_check(
@@ -286,8 +365,10 @@ def run_phase_check(
     selected_ids: Optional[Set[int]],
     dry_run: bool,
     frame_preset: Optional[str] = None,
+    youtube_16x9: bool = False,
+    assets_dir: Optional[Path] = None,
+    raw_dir: Optional[Path] = None,
 ) -> Tuple[int, Optional[Dict[str, Any]]]:
-    # Chế độ check chỉ chạy validate read-only (không ghi file khi --dry-run)
     rc = _run_validate(storyboard_path, sync_files=False)
     if rc != 0:
         print("\n[ABORT] validate_storyboard.py phát hiện ERROR. Dừng kiểm tra.")
@@ -298,7 +379,15 @@ def run_phase_check(
         print(f"\n[ABORT] Không đọc được JSON: {storyboard_path}")
         return 1, None
 
-    info = inspect_episode_status(ep_dir, data, selected_ids=selected_ids, frame_preset=frame_preset)
+    info = inspect_episode_status(
+        ep_dir,
+        data,
+        selected_ids=selected_ids,
+        frame_preset=frame_preset,
+        youtube_16x9=youtube_16x9,
+        assets_dir=assets_dir,
+        raw_dir=raw_dir,
+    )
     print_check_summary(ep_dir, info)
     return 0, info
 
@@ -312,9 +401,13 @@ def run_phase_images(
     cdp_url: Optional[str],
     concurrency: Optional[int] = None,
     frame_preset: Optional[str] = None,
+    youtube_16x9: bool = False,
+    assets_dir: Optional[Path] = None,
+    raw_dir: Optional[Path] = None,
 ) -> int:
-    # Nếu chạy thật: chạy validate_storyboard.py --sync-files trước; dry-run: chỉ kiểm tra read-only
-    rc_val = _run_validate(storyboard_path, sync_files=(not dry_run))
+    # Khi chạy --youtube-16x9: chỉ validate read-only để không chạm assets/ hay pipeline_state.json của TikTok
+    use_sync = (not dry_run) and (not youtube_16x9) and (assets_dir is None) and (raw_dir is None)
+    rc_val = _run_validate(storyboard_path, sync_files=use_sync)
     if rc_val != 0:
         print("\n[ABORT] Storyboard chưa PASS kiểm định. Không chạy phase images.")
         return rc_val
@@ -328,25 +421,37 @@ def run_phase_images(
         cmd.extend(["--cdp-url", cdp_url])
     if concurrency is not None:
         cmd.extend(["--concurrency", str(concurrency)])
-    if frame_preset:
-        cmd.extend(["--frame-preset", frame_preset])
+    _append_io_flags(
+        cmd,
+        frame_preset=frame_preset,
+        youtube_16x9=youtube_16x9,
+        assets_dir=assets_dir,
+        raw_dir=raw_dir,
+    )
 
     rc_bot = _run_subprocess(cmd)
 
     data = _load_json_safe(storyboard_path)
     if data is not None:
         info = inspect_episode_status(
-            ep_dir, data, selected_ids=_parse_scenes_csv(scenes_arg), frame_preset=frame_preset
+            ep_dir,
+            data,
+            selected_ids=_parse_scenes_csv(scenes_arg),
+            frame_preset=frame_preset,
+            youtube_16x9=youtube_16x9,
+            assets_dir=assets_dir,
+            raw_dir=raw_dir,
         )
         done_img = info["total_scenes"] - len(info["missing_raw"])
+        raw_lbl = info.get("raw_dir_name", "raw_images")
         print("\n" + "-" * 84)
         print(
             f"[TÓM TẮT PHASE IMAGES] Đã sẵn sàng ảnh/thành phẩm: {done_img}/{info['total_scenes']} | "
-            f"Còn thiếu ảnh gốc: {len(info['missing_raw'])} | "
+            f"Còn thiếu ảnh gốc ({raw_lbl}/): {len(info['missing_raw'])} | "
             f"Policy error (ảnh): {info['img_policy_errors']}"
         )
         if not dry_run:
-            print("Gợi ý: Hãy duyệt nhanh thư mục raw_images/ (xóa ảnh xấu nếu có rồi chạy lại --phase images) trước khi sang --phase videos.")
+            print(f"Gợi ý: Hãy duyệt nhanh thư mục {raw_lbl}/ (xóa ảnh xấu nếu có rồi chạy lại --phase images) trước khi sang --phase videos.")
         print("-" * 84)
     return rc_bot
 
@@ -367,6 +472,9 @@ def run_phase_videos(
     cdp_url: Optional[str],
     concurrency: Optional[int] = None,
     frame_preset: Optional[str] = None,
+    youtube_16x9: bool = False,
+    assets_dir: Optional[Path] = None,
+    raw_dir: Optional[Path] = None,
 ) -> int:
     rc_val = _run_validate(storyboard_path, sync_files=False)
     if rc_val != 0:
@@ -378,11 +486,26 @@ def run_phase_videos(
         return 1
 
     selected_ids = _parse_scenes_csv(scenes_arg)
-    info = inspect_episode_status(ep_dir, data, selected_ids=selected_ids, frame_preset=frame_preset)
+    info = inspect_episode_status(
+        ep_dir,
+        data,
+        selected_ids=selected_ids,
+        frame_preset=frame_preset,
+        youtube_16x9=youtube_16x9,
+        assets_dir=assets_dir,
+        raw_dir=raw_dir,
+    )
+    _, eff_assets, eff_raw, _ = _resolve_episode_io(
+        ep_dir,
+        data,
+        frame_preset=frame_preset,
+        youtube_16x9=youtube_16x9,
+        assets_dir=assets_dir,
+        raw_dir=raw_dir,
+    )
     pending_vids: List[int] = info["pending_flow_videos"]
 
     if dry_run:
-        # Cho chạy flow_bot --mode videos --dry-run để in rõ bảng SKIP_EXISTING_ASSET từng cảnh
         cmd = [sys.executable, str(FLOW_BOT_SCRIPT), str(storyboard_path), "--mode", "videos", "--dry-run"]
         if scenes_arg:
             cmd.extend(["--scenes", scenes_arg])
@@ -390,22 +513,28 @@ def run_phase_videos(
             cmd.extend(["--cdp-url", cdp_url])
         if concurrency is not None:
             cmd.extend(["--concurrency", str(concurrency)])
-        if frame_preset:
-            cmd.extend(["--frame-preset", frame_preset])
+        _append_io_flags(
+            cmd,
+            frame_preset=frame_preset,
+            youtube_16x9=youtube_16x9,
+            assets_dir=assets_dir,
+            raw_dir=raw_dir,
+        )
         _run_subprocess(cmd)
 
-        raw_dir = ep_dir / "raw_images"
-        ready_for_video = [sid for sid in pending_vids if _file_ok(raw_dir / f"{sid:03d}.png", MIN_IMAGE_BYTES)]
+        ready_for_video = [
+            sid for sid in pending_vids if _has_video_start_frame(sid, eff_raw, eff_assets, youtube_16x9=youtube_16x9)
+        ]
         missing_raw_for_video = [sid for sid in pending_vids if sid not in ready_for_video]
         batches_planned = _chunk_list(pending_vids, batch_size)
 
         print("\n" + "=" * 84)
         print(f"KẾ HOẠCH CHIA MẺ PHASE VIDEOS [DRY-RUN] (batch_size={batch_size})")
         print("=" * 84)
-        print(f"  Cảnh flow_video đã có assets/*.mp4 (bảo vệ) : {len(info['done_assets'])} cảnh xong toàn tập")
+        print(f"  Cảnh flow_video đã có {eff_assets.name}/*.mp4 (bảo vệ): {len(info['done_assets'])} cảnh xong toàn tập")
         print(f"  Cảnh flow_video chưa có .mp4                : {len(pending_vids)} cảnh {pending_vids}")
-        print(f"    - Đã đủ raw_images/*.png (chạy được ngay) : {len(ready_for_video)} cảnh {ready_for_video}")
-        print(f"    - Thiếu raw_images/*.png (cần gen ảnh)    : {len(missing_raw_for_video)} cảnh {missing_raw_for_video}")
+        print(f"    - Đã đủ ảnh khung đầu (chạy được ngay)    : {len(ready_for_video)} cảnh {ready_for_video}")
+        print(f"    - Thiếu ảnh khung đầu (cần gen ảnh)       : {len(missing_raw_for_video)} cảnh {missing_raw_for_video}")
         print(f"  Dự kiến chia {len(batches_planned)} mẻ (sau khi đủ ảnh gốc):")
         for b_idx, batch in enumerate(batches_planned, start=1):
             csv_str = ",".join(str(x) for x in batch)
@@ -415,16 +544,16 @@ def run_phase_videos(
         return 0
 
     if not pending_vids:
-        print("\n[VIDEOS] Tất cả các cảnh flow_video được chọn đã có thành phẩm trong assets/. Không cần chạy thêm!")
+        print(f"\n[VIDEOS] Tất cả các cảnh flow_video được chọn đã có thành phẩm trong {eff_assets.name}/. Không cần chạy thêm!")
         print_check_summary(ep_dir, info)
         return 0
 
-    # Kiểm tra bắt buộc: toàn bộ cảnh sắp chạy video PHẢI đã có raw_images/{id:03d}.png
-    raw_dir = ep_dir / "raw_images"
-    missing_raw_vids = [sid for sid in pending_vids if not _file_ok(raw_dir / f"{sid:03d}.png", MIN_IMAGE_BYTES)]
+    missing_raw_vids = [
+        sid for sid in pending_vids if not _has_video_start_frame(sid, eff_raw, eff_assets, youtube_16x9=youtube_16x9)
+    ]
     if missing_raw_vids:
-        print("\n[ABORT] Thiếu ảnh gốc trong raw_images/ cho các cảnh flow_video sau — DỪNG SỚM (không chạy mù):")
-        print(f"  Các cảnh thiếu raw_images/{{id:03d}}.png: {missing_raw_vids}")
+        print(f"\n[ABORT] Thiếu ảnh khung đầu trong {eff_raw.name}/ (hoặc {eff_assets.name}/) cho các cảnh flow_video sau — DỪNG SỚM:")
+        print(f"  Các cảnh thiếu ảnh khung đầu: {missing_raw_vids}")
         print("  Hãy chạy `--phase images` trước để tạo đủ ảnh gốc (0 tín dụng).")
         return 1
 
@@ -465,8 +594,13 @@ def run_phase_videos(
             cmd.extend(["--cdp-url", cdp_url])
         if concurrency is not None:
             cmd.extend(["--concurrency", str(concurrency)])
-        if frame_preset:
-            cmd.extend(["--frame-preset", frame_preset])
+        _append_io_flags(
+            cmd,
+            frame_preset=frame_preset,
+            youtube_16x9=youtube_16x9,
+            assets_dir=assets_dir,
+            raw_dir=raw_dir,
+        )
         rc = _run_subprocess(cmd)
         if rc == 2:
             print("\n🛑 [DỪNG KHẨN CẤP] flow_bot.py phát hiện sai cấu hình tín dụng (SafetyAssertionError)!")
@@ -475,9 +609,16 @@ def run_phase_videos(
             had_error = True
             print(f"[WARN] Mẻ {b_idx} có cảnh lỗi / policy_error (exit code {rc}).")
 
-    # Kết thúc bằng báo cáo giống --phase check
     data_after = _load_json_safe(storyboard_path) or data
-    info_after = inspect_episode_status(ep_dir, data_after, selected_ids=selected_ids, frame_preset=frame_preset)
+    info_after = inspect_episode_status(
+        ep_dir,
+        data_after,
+        selected_ids=selected_ids,
+        frame_preset=frame_preset,
+        youtube_16x9=youtube_16x9,
+        assets_dir=assets_dir,
+        raw_dir=raw_dir,
+    )
     print_check_summary(ep_dir, info_after)
     if info_after["vid_policy_errors"]:
         print(
@@ -498,6 +639,9 @@ def run_phase_all(
     cdp_url: Optional[str],
     concurrency: Optional[int] = None,
     frame_preset: Optional[str] = None,
+    youtube_16x9: bool = False,
+    assets_dir: Optional[Path] = None,
+    raw_dir: Optional[Path] = None,
 ) -> int:
     rc_img = run_phase_images(
         ep_dir,
@@ -507,6 +651,9 @@ def run_phase_all(
         cdp_url=cdp_url,
         concurrency=concurrency,
         frame_preset=frame_preset,
+        youtube_16x9=youtube_16x9,
+        assets_dir=assets_dir,
+        raw_dir=raw_dir,
     )
     if rc_img == 2:
         return 2
@@ -522,9 +669,13 @@ def run_phase_all(
             cdp_url=cdp_url,
             concurrency=concurrency,
             frame_preset=frame_preset,
+            youtube_16x9=youtube_16x9,
+            assets_dir=assets_dir,
+            raw_dir=raw_dir,
         )
 
-    img_policy_err, _ = _read_policy_errors(ep_dir)
+    state_file = ep_dir / ("pipeline_state_16x9.json" if youtube_16x9 else "pipeline_state.json")
+    img_policy_err, _ = _read_policy_errors(ep_dir, state_path=state_file)
     if img_policy_err:
         print("\n" + "=" * 84)
         print(f"[DỪNG GIỮA PHASE ALL] Phát hiện {len(img_policy_err)} cảnh ảnh bị lỗi Policy: {img_policy_err}")
@@ -536,10 +687,11 @@ def run_phase_all(
         print("\n[DỪNG GIỮA PHASE ALL] Phase images kết thúc có lỗi kỹ thuật. Hãy xử lý xong ảnh rồi chạy tiếp.")
         return rc_img
 
+    raw_lbl = raw_dir.name if raw_dir else ("raw_images_16x9" if youtube_16x9 else "raw_images")
     if not yes:
         try:
             ans = input(
-                "\nĐã xong toàn bộ ảnh gốc (0 tín dụng). Hãy duyệt nhanh thư mục `raw_images/` "
+                f"\nĐã xong toàn bộ ảnh gốc (0 tín dụng). Hãy duyệt nhanh thư mục `{raw_lbl}/` "
                 "(xóa ảnh lỗi nếu có rồi chạy lại `--phase images`). "
                 "Nhấn Enter để tiếp tục chạy Video, hoặc gõ `q` để dừng: "
             ).strip().lower()
@@ -559,6 +711,9 @@ def run_phase_all(
         cdp_url=cdp_url,
         concurrency=concurrency,
         frame_preset=frame_preset,
+        youtube_16x9=youtube_16x9,
+        assets_dir=assets_dir,
+        raw_dir=raw_dir,
     )
 
 
@@ -618,6 +773,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Ghi đè frame_preset từ storyboard.json (portrait_9_16 | framed_4_5 | framed_1_1 | landscape_16_9).",
     )
+    parser.add_argument(
+        "--youtube-16x9",
+        action="store_true",
+        help="Sản xuất song song bản YouTube 16:9 vào raw_images_16x9/ & assets_16x9/ (không đụng assets/ TikTok).",
+    )
+    parser.add_argument(
+        "--assets-dir",
+        type=Path,
+        default=None,
+        help="Thư mục đầu ra tùy chỉnh cho ảnh/video thành phẩm (vd: assets_16x9).",
+    )
+    parser.add_argument(
+        "--raw-dir",
+        type=Path,
+        default=None,
+        help="Thư mục ảnh gốc tùy chỉnh (vd: raw_images_16x9).",
+    )
     return parser
 
 
@@ -631,6 +803,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     selected_ids = _parse_scenes_csv(args.scenes)
+    eff_frame_preset = "landscape_16_9" if args.youtube_16x9 else args.frame_preset
 
     if args.phase == "check":
         rc, _ = run_phase_check(
@@ -638,7 +811,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             storyboard_path,
             selected_ids=selected_ids,
             dry_run=args.dry_run,
-            frame_preset=args.frame_preset,
+            frame_preset=eff_frame_preset,
+            youtube_16x9=bool(args.youtube_16x9),
+            assets_dir=args.assets_dir,
+            raw_dir=args.raw_dir,
         )
         return rc
 
@@ -650,7 +826,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             dry_run=args.dry_run,
             cdp_url=args.cdp_url,
             concurrency=args.concurrency,
-            frame_preset=args.frame_preset,
+            frame_preset=eff_frame_preset,
+            youtube_16x9=bool(args.youtube_16x9),
+            assets_dir=args.assets_dir,
+            raw_dir=args.raw_dir,
         )
 
     if args.phase == "videos":
@@ -663,7 +842,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             yes=args.yes,
             cdp_url=args.cdp_url,
             concurrency=args.concurrency,
-            frame_preset=args.frame_preset,
+            frame_preset=eff_frame_preset,
+            youtube_16x9=bool(args.youtube_16x9),
+            assets_dir=args.assets_dir,
+            raw_dir=args.raw_dir,
         )
 
     return run_phase_all(
@@ -675,7 +857,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         yes=args.yes,
         cdp_url=args.cdp_url,
         concurrency=args.concurrency,
-        frame_preset=args.frame_preset,
+        frame_preset=eff_frame_preset,
+        youtube_16x9=bool(args.youtube_16x9),
+        assets_dir=args.assets_dir,
+        raw_dir=args.raw_dir,
     )
 
 

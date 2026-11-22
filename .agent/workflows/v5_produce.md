@@ -1,8 +1,8 @@
 ---
-description: Quy trình tự động sản xuất Series Lịch sử TikTok V5.3 (Khóa frame_preset + Ưu tiên Tư liệu thật + Chống bóng nhựa AI) từ file kiến thức .txt ra đủ file cho DubStudio v3.2
+description: Quy trình tự động sản xuất Series Lịch sử Dual-Delivery V5.4 (TikTok 9:16 + YouTube 16:9 song song `assets_16x9/` + Tư liệu thật + Chống bóng nhựa AI) từ file kiến thức .txt ra đủ file cho DubStudio
 ---
 
-# WORKFLOW SẢN XUẤT SERIES V5.3
+# WORKFLOW SẢN XUẤT SERIES DUAL-DELIVERY V5.4
 
 Khi người dùng chỉ định 1 file `.txt` trong `automation/inputs/` hoặc yêu cầu sản xuất 1 tập cụ thể, thực hiện đúng trình tự sau:
 
@@ -44,5 +44,24 @@ Làm dứt điểm từng tập một để không bị viết lướt:
    `.venv\Scripts\python automation/scripts/validate_storyboard.py "story_mode/projects/<Ten_Series>/<Ten_Tap>/storyboard.json" --sync-files`
 2. Nếu có bất kỳ lỗi ERROR hoặc WARNING V5.3 nào (schema, Whisper sync, từ cấm Flow, thiếu cue `frame_preset`, Hook 3s > 14 từ / mở đầu cấm / thiếu SFX, trùng `ken_burns`, lệch biên tỉ lệ hạng...), TỰ ĐỘNG sửa `storyboard.json` (và cập nhật `archive_checklist.md` + `fact_check.md` nếu đổi nội dung) rồi chạy lại `--sync-files` đến khi PASS 100% (`0 ERROR`).
 3. Báo cáo ngắn gọn: đường dẫn thư mục tập, `frame_preset` + Hạng tỉ lệ (`0_100` / `30_70` / `50_50` / `70_30`), tổng số cảnh (`flow_video` vs `static_image`), ước tính tín dụng Veo 3.1 (`0` nếu thuần `0_100`), thời lượng `1.00x` & `1.20x`, và nhắc người dùng:
+   - *(Khuyến nghị V5.4 cho YouTube Series)*: có thể gắn thêm `"chapter_title"` (cấp root JSON) và `"is_cta": true` ở cảnh cuối mời xem tập sau (hỗ trợ kiểm tra sạch qua `validate_storyboard.py`).
    - Lấy `elevenlabs.txt` xuất `assets/full_audio.mp3`.
    - Chạy `automation/scripts/fetch_archive_media.py` (mặc định `--exclude-modern` cho sử cận/hiện đại, hoặc thêm `--include-sites` cho sử cổ đại/di tích; duyệt contact sheet loại watermark/sai thời kỳ rồi nạp vào `assets/`) **trước khi chạy `flow_bot.py`** để tận dụng `SKIP_EXISTING_ASSET` và chỉ gen bù các cảnh thiếu theo đúng `frame_preset` (`0 tín dụng`).
+
+## Bước 4: Nâng cấp & Sản xuất Song song Bản YouTube 16:9 Nguyên bản (`assets_16x9/`) — V5.4 Dual-Delivery
+**NGUYÊN TẮC AN TOÀN:** Tuyệt đối KHÔNG sửa hay ghi đè `storyboard.json`, `assets/full_audio.mp3`, `assets/` hay `raw_images/` của bản TikTok/Shorts. Chỉ xuất song song vào `raw_images_16x9/` và `assets_16x9/`!
+
+1. **Nạp ảnh tư liệu thật bản ngang `1920x1080` vào `assets_16x9/`** (tùy chọn — để các tập lịch sử dùng ảnh thật full-bleed không viền mờ):
+   ```powershell
+   .venv\Scripts\python automation\scripts\fetch_archive_media.py --mode commit-image --episode-dir story_mode\projects\<Ten_Series>\<Tap_XX> --scene <id> --input <anh_goc.jpg> --youtube-16x9
+   ```
+   *(Tự động crop/scale về `1920x1080` trong `assets_16x9/`, đồng thời ghi bổ sung `asset_file_16x9` trong `archive_sources.json` mà giữ nguyên thông tin `assets/` cũ).*
+
+2. **Chạy Google Flow sinh bù toàn bộ cảnh còn thiếu ở tỉ lệ `16:9` gốc (`assets_16x9/`):**
+   ```powershell
+   .venv\Scripts\python automation\scripts\run_episode.py story_mode\projects\<Ten_Series>\<Tap_XX> --phase all --youtube-16x9
+   ```
+   *(Hoặc chạy từng pha với `flow_bot.py <Tap_XX>\storyboard.json --youtube-16x9 --mode images` rồi `--mode videos` — tự động giữ ảnh tư liệu đã có trong `assets_16x9/` nhờ `SKIP_EXISTING_ASSET`, chuyển tạm cụm chỉ thị khung dọc trong prompt sang bố cục ngang `16:9 widescreen`, xuất ảnh/clip vào `raw_images_16x9/` và `assets_16x9/`).*
+
+3. **Biên tập gộp toàn Series trong Tab `📺 YouTube 16:9`:**
+   - Chọn thư mục series và bật `[x] Ưu tiên tài nguyên assets_16x9/ (tự lùi về assets/ nếu thiếu)` → `core/series_compiler.py` tự động ưu tiên `.mp4`/`.jpg` ngang từ `assets_16x9/`, dùng lại `assets/full_audio.mp3`, lùi về `assets/` nền mờ cho cảnh chưa có 16:9, và ghi thống kê vào `compliance_report.json`.

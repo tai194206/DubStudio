@@ -1,4 +1,4 @@
-# QUY TẮC BẮT BUỘC: PIPELINE LỊCH SỬ TIKTOK V5.3 (DUBSTUDIO v3.2 + KHUNG THÍCH ỨNG + CHỐNG BÓNG NHỰA AI + GOOGLE FLOW)
+# QUY TẮC BẮT BUỘC: PIPELINE LỊCH SỬ DUAL-DELIVERY V5.4 (TIKTOK 9:16 + YOUTUBE 16:9 SONG SONG + DUBSTUDIO v3.2 + CHỐNG BÓNG NHỰA AI + GOOGLE FLOW)
 
 Mọi tác vụ chia tập, viết kịch bản, thiết kế hình ảnh, motion và xuất JSON cho series lịch sử PHẢI tuân thủ tuyệt đối các luật dưới đây:
 
@@ -49,7 +49,12 @@ Mọi tác vụ chia tập, viết kịch bản, thiết kế hình ảnh, motio
   - KHÔNG dùng dấu ba chấm `...`, ngoặc đơn chú thích hay ký tự lạ trong lời thoại.
   - Có thể dùng chữ số tự nhiên (vì `story_pipeline.py` đã hỗ trợ `_int_to_vi_norms`), nhưng tên riêng nước ngoài khó đọc PHẢI viết phiên âm tiếng Việt thống nhất toàn tập (vd: `Đờ Cát`, `Na-va`, `Giơ-ne-vơ`, `Pi-rốt`).
 
-## 3. Quy chuẩn Hình ảnh Lai & Chống Bóng Nhựa AI V5.3 (Khóa `frame_preset` + Phân nhánh Thời kỳ)
+## 3. Quy chuẩn Hình ảnh Lai & Chống Bóng Nhựa AI V5.4 (Khóa `frame_preset` + Phân nhánh Thời kỳ)
+- **Ánh xạ chuẩn 5 nút tỉ lệ thực tế trên Google Flow (`16:9`, `4:3`, `1:1`, `3:4`, `9:16`):**
+  - `landscape_16_9` → chọn `"16:9"` (`1920x1080`, dùng cho YouTube 16:9 `--youtube-16x9` và series ngang).
+  - `framed_4_5` → ưu tiên `"3:4"` (nút sát khung `4:5` nhất trên UI Flow, giữ bố cục chặt hơn `9:16`; fallback `"9:16"`), thành phẩm chuẩn hóa `1080x1350`.
+  - `framed_1_1` → ưu tiên `"1:1"` (fallback `"4:3"`, rồi `"16:9"`), thành phẩm chuẩn hóa `1080x1080`.
+  - `portrait_9_16` → chọn `"9:16"` (`1080x1920`).
 - **Khóa `frame_preset` cố định toàn series (BẮT BUỘC):**
   - Khi lập `series_plan.md`, phải chốt rõ **1 `frame_preset` duy nhất** cho cả series (`framed_4_5`, `framed_1_1`, `portrait_9_16`, hoặc `landscape_16_9`) và ghi đồng bộ vào trường top-level `"frame_preset"` của mọi `storyboard.json` trong series (tập cũ không khai báo mặc định `portrait_9_16`).
   - Khóa cú pháp bố cục trong `image_prompt` theo đúng khung đã chốt:
@@ -101,9 +106,19 @@ Mọi tác vụ chia tập, viết kịch bản, thiết kế hình ảnh, motio
 - `"motion"` và `"ken_burns"` đều phải có và CHỈ dùng 1 trong 5 giá trị: `["zoom_in", "zoom_out", "pan_left", "pan_right", "static"]`.
 - `"beats"` đủ trường: `id`, `text`, `location`, `intensity` (1–3), `intent` trong `["establish", "explain", "reveal", "emotion"]`, `sfx`.
 - `"on_screen_text"`: chữ IN HOA ngắn 3–6 từ (không đè watermark góc trên trái).
+- *(Tùy chọn V5.4 cho YouTube Series)*: cho phép gắn thêm `"chapter_title"` (chuỗi, cấp root JSON — đặt tên chương ngắn cho Thẻ chương & mục lục YouTube Chapters) và `"is_cta": true` (boolean ở cảnh cuối mời xem tập sau/theo dõi kênh — tab YouTube 16:9 tự nhận diện để gợi ý cắt CTA ở các tập giữa). `validate_storyboard.py` chấp nhận các trường này không cảnh báo.
 - **ĐỒNG BỘ TUYỆT ĐỐI:** `beats[i].text === scenes[i].speech` từng ký tự; `"full_script_for_elevenlabs"` là chuỗi ghép toàn bộ `scenes[i].speech` cách nhau đúng 1 dấu cách.
 - Nếu có `automation/scripts/validate_storyboard.py`, BẮT BUỘC chạy lệnh kiểm tra sau khi xuất JSON và tự sửa đến khi PASS 100%.
 
 ## 6. Quy chuẩn `Caption.md` cho TikTok
 - Mỗi tập trong `story_mode/projects/<Ten_Series>/Caption.md` dùng đúng mẫu:
   `Phần {X} | {Tên Series ngắn}: {Hook/Tiêu đề tập hấp dẫn} #LearnOnTikTok #hoccungtiktok #dongluc #viral #xuhuong #lichsuVietNam #lichsu #tuhaodantoc #xuhuongtiktok #trending #tiktok #{hashtag_su_kien}`
+
+## 7. Quy trình Dual-Delivery V5.4 — Sản xuất Song song YouTube 16:9 (`assets_16x9/`)
+- **BẤT BIẾN AN TOÀN:** Tuyệt đối KHÔNG sửa đổi hay ghi đè `storyboard.json`, `assets/full_audio.mp3`, `assets/`, hay `raw_images/` vốn dùng cho TikTok/Shorts (`9:16` / `4:5` / `1:1`).
+- **Thư mục song song:** Luồng YouTube 16:9 xuất riêng ảnh gốc vào `raw_images_16x9/` và tài nguyên thành phẩm `1920x1080` vào `assets_16x9/`, lưu trạng thái riêng tại `pipeline_state_16x9.json`.
+- **Nâng cấp tư liệu thật bản ngang:** Chạy `fetch_archive_media.py --mode commit-image ... --youtube-16x9` (hoặc `--assets-dir ... --target-size 1920x1080`) để đưa ảnh thật `1920x1080` vào `assets_16x9/` trước khi chạy Flow, giúp bảo vệ 100% ảnh thật qua `SKIP_EXISTING_ASSET` và ghi thêm `asset_file_16x9` vào `archive_sources.json` mà giữ nguyên entry `assets/`.
+- **Sinh bù AI tỉ lệ 16:9 trên Google Flow:** Chạy `run_episode.py <Tap_XX> --phase all --youtube-16x9` (hoặc `flow_bot.py <Tap_XX>\storyboard.json --youtube-16x9 --mode images|videos`):
+  - Tự ép `frame_preset="landscape_16_9"` (nút `"16:9"` trên Google Flow).
+  - Tạm thời chuyển chỉ thị khung dọc trên prompt gửi đi sang bố cục ngang widescreen (`adapt_prompt_for_frame_preset`) **trên bộ nhớ** mà không sửa `storyboard.json` trên đĩa.
+- **Biên tập gộp toàn Series (`core/series_compiler.py` & Tab `📺 YouTube 16:9`):** Tự động ưu tiên `.mp4`/`.jpg` trong `assets_16x9/` (khi bật `prefer_assets_16x9`), tái sử dụng `assets/full_audio.mp3`, chỉ lùi về `assets/` nền mờ ở các cảnh chưa có bản `16:9`, và ghi rõ tỉ lệ `native 16:9` vs `fallback assets/` trong `compliance_report.json`.

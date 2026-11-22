@@ -208,7 +208,7 @@ def resolve_flow_aspect_plan(
     *,
     mode: str = "images",
 ) -> FlowAspectPlan:
-    """Ánh xạ frame_preset sang danh sách nút tỉ lệ trên Google Flow + kích thước xuất assets/*.jpg."""
+    """Ánh xạ frame_preset sang danh sách 5 nút tỉ lệ thực tế trên Google Flow (16:9, 4:3, 1:1, 3:4, 9:16)."""
     fp = get_frame_preset(frame_preset)
     if fp.name == "landscape_16_9":
         return FlowAspectPlan(
@@ -224,7 +224,7 @@ def resolve_flow_aspect_plan(
             frame_preset=fp.name,
             mode=mode,
             preferred=("1:1", "Vuông", "Square"),
-            fallback=("16:9", "Ngang", "Landscape"),
+            fallback=("4:3", "16:9", "Ngang", "Landscape"),
             target_size=(fp.inner_w, fp.inner_h),
             fallback_prompt_cue="1:1 square archival framing, centered subject, edge-to-edge full-bleed, no white borders",
         )
@@ -232,7 +232,7 @@ def resolve_flow_aspect_plan(
         return FlowAspectPlan(
             frame_preset=fp.name,
             mode=mode,
-            preferred=("4:5", "3:4"),
+            preferred=("3:4", "4:5"),
             fallback=("9:16", "Dọc", "Portrait"),
             target_size=(fp.inner_w, fp.inner_h),
             fallback_prompt_cue="4:5 vertical framing, balanced headroom, subject centered within 4:5 safe zone, edge-to-edge full-bleed, no white borders",
@@ -245,6 +245,155 @@ def resolve_flow_aspect_plan(
         target_size=(fp.inner_w, fp.inner_h),
         fallback_prompt_cue="",
     )
+
+
+WIDESCREEN_16_9_CUE = (
+    "16:9 widescreen cinematic archival framing, wide horizontal composition, "
+    "edge-to-edge full-bleed, no white borders"
+)
+
+_VERTICAL_CUE_PATTERNS: Tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bupright\s+9:16\s+portrait(?:\s+(?:orientation|framing))?\b", re.I),
+    re.compile(r"\b9:16\s+(?:portrait|vertical)(?:\s+(?:orientation|framing))?\b", re.I),
+    re.compile(r"\b(?:portrait|vertical)\s+9:16(?:\s+(?:orientation|framing))?\b", re.I),
+    re.compile(
+        r"\b4:5\s+vertical\s+framing(?:\s*,\s*balanced\s+headroom)?(?:\s*,\s*subject\s+centered\s+within\s+4:5\s+safe\s+zone)?",
+        re.I,
+    ),
+    re.compile(r"\bsubject\s+centered\s+within\s+4:5\s+safe\s+zone\b", re.I),
+    re.compile(r"\b1:1\s+square(?:\s+archival)?\s+framing(?:\s*,\s*centered\s+subject)?", re.I),
+    re.compile(r"\b(?:vertical\s+framing|portrait\s+orientation|upright\s+orientation)\b", re.I),
+    re.compile(r"(?<![0-9.])(?:9:16|4:5|1:1)(?![0-9.])"),
+)
+
+
+def adapt_prompt_for_frame_preset(
+    prompt: str,
+    frame_preset: Union[str, FramePreset, None],
+) -> str:
+    """Chuyển đổi chỉ thị khung trên prompt lúc gửi đi (không sửa file storyboard.json trên đĩa).
+
+    Khi xuất `landscape_16_9` từ kịch bản vốn viết cho 9:16 / 4:5 / 1:1, tự động gỡ cụm khóa
+    chiều dọc/vuông và chèn cụm bố cục ngang 16:9, giữ nguyên 100% nội dung lịch sử.
+    """
+    fp = get_frame_preset(frame_preset)
+    if fp.name != "landscape_16_9" or not (prompt or "").strip():
+        return prompt
+
+    cleaned = str(prompt)
+    for pat in _VERTICAL_CUE_PATTERNS:
+        cleaned = pat.sub("", cleaned)
+
+    # Dọn dấu phẩy/khoảng trắng dư thừa sau khi gỡ cụm dọc
+    cleaned = re.sub(r"\s*,\s*(?:,\s*)+", ", ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = cleaned.strip(" ,\t\r\n")
+
+    low = cleaned.lower()
+    if "16:9" in low and ("widescreen" in low or "horizontal" in low):
+        return cleaned
+
+    m_notext = re.search(r",?\s*\bno\s+text\b", cleaned, flags=re.I)
+    if m_notext:
+        head = cleaned[: m_notext.start()].rstrip(" ,")
+        tail = cleaned[m_notext.start() :].lstrip(" ,")
+        return f"{head}, {WIDESCREEN_16_9_CUE}, {tail}" if head else f"{WIDESCREEN_16_9_CUE}, {tail}"
+    return f"{cleaned}, {WIDESCREEN_16_9_CUE}" if cleaned else WIDESCREEN_16_9_CUE
+
+
+def resolve_io_paths(
+    ep_dir: Path,
+    *,
+    youtube_16x9: bool = False,
+    assets_dir: Optional[Path] = None,
+    raw_dir: Optional[Path] = None,
+    frame_preset: Optional[str] = None,
+    storyboard_preset: Optional[str] = None,
+) -> Tuple[FramePreset, Path, Path, Path]:
+    """Xác định frame_preset và các thư mục I/O song song (mặc định TikTok hoặc `--youtube-16x9`)."""
+    def _resolve_sub(cand: Optional[Path], default_name: str) -> Path:
+        if cand is None:
+            return ep_dir / default_name
+        return cand if cand.is_absolute() else (ep_dir / cand)
+
+    if youtube_16x9:
+        eff_fp = get_frame_preset("landscape_16_9")
+        eff_assets = _resolve_sub(assets_dir, "assets_16x9")
+        eff_raw = _resolve_sub(raw_dir, "raw_images_16x9")
+        state_path = ep_dir / "pipeline_state_16x9.json"
+        return eff_fp, eff_assets, eff_raw, state_path
+
+    eff_fp = resolve_frame_preset(override=frame_preset, storyboard_preset=storyboard_preset)
+    eff_assets = _resolve_sub(assets_dir, "assets")
+    eff_raw = _resolve_sub(raw_dir, "raw_images")
+    state_path = ep_dir / "pipeline_state.json"
+    return eff_fp, eff_assets, eff_raw, state_path
+
+
+def _find_video_start_frame(
+    sid: int,
+    raw_dir: Path,
+    assets_dir: Path,
+    *,
+    youtube_16x9: bool = False,
+) -> Optional[Path]:
+    """Tìm ảnh khung đầu cho --mode videos (hỗ trợ cả raw_images* và ảnh đặt sẵn trong assets_16x9/)."""
+    candidates: List[Path] = []
+    if youtube_16x9:
+        for ext in (".jpg", ".jpeg", ".png", ".webp"):
+            candidates.append(assets_dir / f"{sid:03d}{ext}")
+        for ext in (".png", ".jpg", ".jpeg", ".webp"):
+            candidates.append(raw_dir / f"{sid:03d}{ext}")
+    else:
+        candidates.append(raw_dir / f"{sid:03d}.png")
+    for cand in candidates:
+        if _file_ok(cand, MIN_IMAGE_BYTES):
+            return cand
+    return None
+
+
+def _ensure_custom_pipeline_state(
+    state_path: Path,
+    data: Dict[str, Any],
+    *,
+    assets_rel: str,
+    raw_rel: str,
+    frame_preset: str,
+) -> None:
+    """Khởi tạo/đồng bộ file state riêng (vd pipeline_state_16x9.json) mà không đụng assets/ cũ."""
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_by_id = _load_pipeline_state_readonly(state_path)
+    new_scenes: List[Dict[str, Any]] = []
+    for sc in data.get("scenes", []):
+        sid = int(sc["id"])
+        asset_type = str(sc.get("asset_type", "static_image"))
+        ext = "mp4" if asset_type == "flow_video" else "jpg"
+        default_vid = "pending" if asset_type == "flow_video" else "skipped"
+        old = existing_by_id.get(sid)
+        if old is not None and old.get("asset_type") == asset_type:
+            img_st = str(old.get("image_status", "pending"))
+            vid_st = str(old.get("video_status", default_vid))
+            err = str(old.get("error", ""))
+        else:
+            img_st, vid_st, err = "pending", default_vid, ""
+        new_scenes.append(
+            {
+                "id": sid,
+                "asset_type": asset_type,
+                "target_image": f"{raw_rel}/{sid:03d}.png",
+                "target_asset": f"{assets_rel}/{sid:03d}.{ext}",
+                "image_status": img_st,
+                "video_status": vid_st,
+                "error": err,
+            }
+        )
+    payload = {
+        "title": str(data.get("title", "")),
+        "frame_preset": frame_preset,
+        "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "scenes": new_scenes,
+    }
+    _save_pipeline_state_atomic(state_path, payload)
 
 
 def _augment_prompt_for_flow_aspect(
@@ -369,11 +518,18 @@ def _build_execution_plan(
     selected_ids: Optional[Set[int]],
     limit: Optional[int],
     force: bool,
+    assets_dir: Optional[Path] = None,
+    raw_dir: Optional[Path] = None,
+    state_path: Optional[Path] = None,
+    youtube_16x9: bool = False,
 ) -> List[ScenePlanItem]:
     """Lập kế hoạch chi tiết cho từng cảnh (dùng chung cho --dry-run và chạy thật)."""
-    raw_dir = ep_dir / "raw_images"
-    assets_dir = ep_dir / "assets"
-    state_by_id = _load_pipeline_state_readonly(ep_dir / "pipeline_state.json")
+    eff_raw = raw_dir or (ep_dir / ("raw_images_16x9" if youtube_16x9 else "raw_images"))
+    eff_assets = assets_dir or (ep_dir / ("assets_16x9" if youtube_16x9 else "assets"))
+    eff_state = state_path or (ep_dir / ("pipeline_state_16x9.json" if youtube_16x9 else "pipeline_state.json"))
+    assets_label = eff_assets.name
+    raw_label = eff_raw.name
+    state_by_id = _load_pipeline_state_readonly(eff_state)
     scenes: List[Dict[str, Any]] = data.get("scenes", [])
 
     plan: List[ScenePlanItem] = []
@@ -386,12 +542,12 @@ def _build_execution_plan(
 
         asset_type = str(sc.get("asset_type", "static_image"))
         target_filename = _resolve_target_asset_filename(data, idx, sc)
-        target_asset = assets_dir / target_filename
-        raw_png = raw_dir / f"{sid:03d}.png"
-        dst_jpg = assets_dir / f"{sid:03d}.jpg"
+        target_asset = eff_assets / target_filename
+        raw_png = eff_raw / f"{sid:03d}.png"
+        dst_jpg = eff_assets / f"{sid:03d}.jpg"
         st_rec = state_by_id.get(sid, {})
 
-        # Chốt bảo vệ thành phẩm có sẵn trong assets/ (trừ khi truyền --force)
+        # Chốt bảo vệ thành phẩm có sẵn trong thư mục assets đích (trừ khi truyền --force)
         if not force:
             if asset_type == "flow_video" and _file_ok(target_asset, MIN_VIDEO_BYTES):
                 sz_mb = target_asset.stat().st_size / (1024 * 1024)
@@ -400,7 +556,7 @@ def _build_execution_plan(
                         scene_id=sid,
                         asset_type=asset_type,
                         action="SKIP_EXISTING_ASSET",
-                        reason=f"Đã có thành phẩm assets/{target_filename} ({sz_mb:.2f} MB) → bảo vệ, không gen đè",
+                        reason=f"Đã có thành phẩm {assets_label}/{target_filename} ({sz_mb:.2f} MB) → bảo vệ, không gen đè",
                         estimated_credits=0,
                         scene_data=sc,
                     )
@@ -413,7 +569,7 @@ def _build_execution_plan(
                         scene_id=sid,
                         asset_type=asset_type,
                         action="SKIP_EXISTING_ASSET",
-                        reason=f"Đã có thành phẩm assets/{target_filename} ({sz_kb:.1f} KB) → bảo vệ, không gen đè",
+                        reason=f"Đã có thành phẩm {assets_label}/{target_filename} ({sz_kb:.1f} KB) → bảo vệ, không gen đè",
                         estimated_credits=0,
                         scene_data=sc,
                     )
@@ -430,7 +586,7 @@ def _build_execution_plan(
                             scene_id=sid,
                             asset_type=asset_type,
                             action="CONVERT_JPG",
-                            reason="Đã có PNG gốc (>10KB) → chỉ convert sang assets/*.jpg",
+                            reason=f"Đã có PNG gốc (>10KB) → chỉ convert sang {assets_label}/*.jpg",
                             estimated_credits=0,
                             scene_data=sc,
                         )
@@ -485,13 +641,18 @@ def _build_execution_plan(
                         scene_data=sc,
                     )
                 )
-            elif not _file_ok(raw_png, MIN_IMAGE_BYTES):
+            elif _find_video_start_frame(sid, eff_raw, eff_assets, youtube_16x9=youtube_16x9) is None:
+                miss_hint = (
+                    f"{assets_label}/{sid:03d}.jpg hoặc {raw_label}/{sid:03d}.png"
+                    if youtube_16x9
+                    else f"{raw_label}/{sid:03d}.png"
+                )
                 plan.append(
                     ScenePlanItem(
                         scene_id=sid,
                         asset_type=asset_type,
                         action="ERROR_MISSING_RAW",
-                        reason=f"THIẾU ảnh gốc raw_images/{sid:03d}.png (>10KB) → bỏ qua, không gen mù",
+                        reason=f"THIẾU ảnh khung đầu {miss_hint} (>10KB) → bỏ qua, không gen mù",
                         estimated_credits=0,
                         scene_data=sc,
                     )
@@ -532,17 +693,21 @@ def _print_plan_table(
     *,
     dry_run: bool,
     frame_preset: Union[str, FramePreset] = DEFAULT_FRAME_PRESET,
+    assets_dir: Optional[Path] = None,
+    raw_dir: Optional[Path] = None,
 ) -> Tuple[int, int]:
     """In bảng kế hoạch chạy và trả về (run_count, total_credits)."""
     fp = get_frame_preset(frame_preset)
     aspect_plan = resolve_flow_aspect_plan(fp, mode=mode)
+    assets_lbl = assets_dir.name if assets_dir else "assets"
+    raw_lbl = raw_dir.name if raw_dir else "raw_images"
     tag = " [DRY-RUN — KHÔNG MỞ CHROME, KHÔNG TỐN TÍN DỤNG]" if dry_run else ""
     print("\n" + "=" * 96)
     print(f"KẾ HOẠCH FLOW BOT | MODE: {mode.upper()}{tag}")
     print(f"Tập phim: {storyboard_path.parent}")
     print(
         f"Khung hình: {fp.name} (Flow ưu tiên {aspect_plan.preferred[0]} | "
-        f"assets/*.jpg: {fp.inner_w}x{fp.inner_h} → xuất {fp.out_w}x{fp.out_h})"
+        f"thư mục: {raw_lbl}/ → {assets_lbl}/ {fp.inner_w}x{fp.inner_h} → xuất {fp.out_w}x{fp.out_h})"
     )
     print("=" * 96)
     print(f"{'ID':>4} | {'Loại cảnh':<13} | {'Hành động':<19} | {'Tín dụng':>8} | Lý do / Chi tiết")
@@ -2060,17 +2225,22 @@ def run_images_mode(
     *,
     concurrency: Optional[int] = None,
     frame_preset: Optional[str] = None,
+    assets_dir: Optional[Path] = None,
+    raw_dir: Optional[Path] = None,
+    state_path: Optional[Path] = None,
 ) -> int:
     """Chế độ --mode images: gen toàn bộ ảnh gốc (0 tín dụng) theo từng đợt song song + xuất JPG đúng frame_preset."""
     ep_dir = storyboard_path.parent
-    raw_dir = ep_dir / "raw_images"
-    assets_dir = ep_dir / "assets"
-    state_path = ep_dir / "pipeline_state.json"
-    state = _load_full_pipeline_state(state_path, data)
+    eff_raw = raw_dir or (ep_dir / "raw_images")
+    eff_assets = assets_dir or (ep_dir / "assets")
+    eff_state = state_path or (ep_dir / "pipeline_state.json")
+    eff_raw.mkdir(parents=True, exist_ok=True)
+    eff_assets.mkdir(parents=True, exist_ok=True)
+    state = _load_full_pipeline_state(eff_state, data)
     eff_fp = resolve_frame_preset(override=frame_preset, storyboard_preset=data.get("frame_preset"))
     aspect_plan = resolve_flow_aspect_plan(eff_fp, mode="images")
 
-    # Bước A: Đồng bộ pipeline_state cho các cảnh đã có sẵn thành phẩm trong assets/
+    # Bước A: Đồng bộ pipeline_state cho các cảnh đã có sẵn thành phẩm trong assets đích
     state_dirty = False
     for item in plan:
         if item.action == "SKIP_EXISTING_ASSET":
@@ -2080,18 +2250,21 @@ def run_images_mode(
                 _update_scene_state(state, item.scene_id, image_status="done", video_status="skipped", error="")
             state_dirty = True
     if state_dirty:
-        _save_pipeline_state_atomic(state_path, state)
+        _save_pipeline_state_atomic(eff_state, state)
 
     # Bước B: Xử lý ngay các cảnh chỉ cần convert PNG -> JPG (không cần mở Chrome)
     for item in plan:
         if item.action == "CONVERT_JPG":
             sid = item.scene_id
-            raw_png = raw_dir / f"{sid:03d}.png"
-            dst_jpg = assets_dir / f"{sid:03d}.jpg"
+            raw_png = eff_raw / f"{sid:03d}.png"
+            dst_jpg = eff_assets / f"{sid:03d}.jpg"
             out_w, out_h = _convert_png_to_jpg(raw_png, dst_jpg, frame_preset=eff_fp.name)
             _update_scene_state(state, sid, image_status="done", video_status="skipped", error="")
-            _save_pipeline_state_atomic(state_path, state)
-            print(f"[Cảnh {sid:03d}] Đã convert ảnh gốc sẵn có -> assets/{sid:03d}.jpg ({out_w}x{out_h}, 0 tín dụng).")
+            _save_pipeline_state_atomic(eff_state, state)
+            print(
+                f"[Cảnh {sid:03d}] Đã convert ảnh gốc sẵn có -> {eff_assets.name}/{sid:03d}.jpg "
+                f"({out_w}x{out_h}, 0 tín dụng)."
+            )
 
     runnable = [it for it in plan if it.action == "RUN"]
     if not runnable:
@@ -2110,7 +2283,7 @@ def run_images_mode(
 
     print(
         f"[IMAGES] Chế độ đồng loạt: {eff_conc} ảnh/đợt (tổng {len(runnable)} ảnh, "
-        f"khung {eff_fp.name} → assets {eff_fp.inner_w}x{eff_fp.inner_h}, 0 tín dụng).",
+        f"khung {eff_fp.name} → {eff_assets.name}/ {eff_fp.inner_w}x{eff_fp.inner_h}, 0 tín dụng).",
         flush=True,
     )
 
@@ -2152,7 +2325,8 @@ def run_images_mode(
                     sid = item.scene_id
                     sc = item.scene_data
                     raw_prompt = str(sc.get("image_prompt", "")).strip()
-                    prompt = _augment_prompt_for_flow_aspect(raw_prompt, aspect_plan, selected_ui_aspect)
+                    adapted_prompt = adapt_prompt_for_frame_preset(raw_prompt, eff_fp)
+                    prompt = _augment_prompt_for_flow_aspect(adapted_prompt, aspect_plan, selected_ui_aspect)
 
                     cur_txt = _get_visible_body_text(page)
                     q_lim = _detect_queue_limit(cur_txt, baseline_text)
@@ -2203,7 +2377,7 @@ def run_images_mode(
                         failed_count += 1
                         shot = _save_debug_screenshot(page, f"error_scene_{sid:03d}_images.png")
                         _update_scene_state(state, sid, image_status="error", error=str(exc))
-                        _save_pipeline_state_atomic(state_path, state)
+                        _save_pipeline_state_atomic(eff_state, state)
                         print(f"  ✗ Cảnh {sid:03d}: LỖI khi gửi lệnh ({exc}) | Ảnh debug: {shot}", flush=True)
 
                 if deferred:
@@ -2229,7 +2403,7 @@ def run_images_mode(
                         sid = sub["id"]
                         _save_debug_screenshot(page, f"policy_scene_{sid:03d}_images.png")
                         _update_scene_state(state, sid, image_status="policy_error", error=str(pe))
-                    _save_pipeline_state_atomic(state_path, state)
+                    _save_pipeline_state_atomic(eff_state, state)
                     print(f"  ✗ Cảnh {[s['id'] for s in submitted]}: BỊ CHẶN POLICY ({pe})", flush=True)
                     continue
 
@@ -2240,16 +2414,16 @@ def run_images_mode(
                 for sid, tile in matched.items():
                     item = sub_by_id[sid]["item"]
                     asset_type = item.asset_type
-                    raw_png = raw_dir / f"{sid:03d}.png"
-                    tmp_img = raw_dir / f"{sid:03d}.tmp.download"
-                    dst_jpg = assets_dir / f"{sid:03d}.jpg"
+                    raw_png = eff_raw / f"{sid:03d}.png"
+                    tmp_img = eff_raw / f"{sid:03d}.tmp.download"
+                    dst_jpg = eff_assets / f"{sid:03d}.jpg"
 
                     if tile.get("is_error"):
                         failed_count += 1
                         err_txt = tile.get("text") or policy_msg or "Google Flow từ chối tạo ảnh (Policy)"
                         shot = _save_debug_screenshot(page, f"policy_scene_{sid:03d}_images.png")
                         _update_scene_state(state, sid, image_status="policy_error", error=err_txt[:300])
-                        _save_pipeline_state_atomic(state_path, state)
+                        _save_pipeline_state_atomic(eff_state, state)
                         print(f"  ✗ Cảnh {sid:03d}: BỊ CHẶN POLICY ({err_txt[:120]}) | Ảnh debug: {shot}", flush=True)
                         continue
 
@@ -2271,18 +2445,19 @@ def run_images_mode(
                             out_w, out_h = _convert_png_to_jpg(raw_png, dst_jpg, frame_preset=eff_fp.name)
                             _update_scene_state(state, sid, image_status="done", video_status="skipped", error="")
                             print(
-                                f"  ✓ Cảnh {sid:03d}: Đã lưu raw_images/{sid:03d}.png + assets/{sid:03d}.jpg ({out_w}x{out_h})",
+                                f"  ✓ Cảnh {sid:03d}: Đã lưu {eff_raw.name}/{sid:03d}.png + "
+                                f"{eff_assets.name}/{sid:03d}.jpg ({out_w}x{out_h})",
                                 flush=True,
                             )
                         else:
                             _update_scene_state(state, sid, image_status="done", error="")
-                            print(f"  ✓ Cảnh {sid:03d}: Đã lưu raw_images/{sid:03d}.png", flush=True)
-                        _save_pipeline_state_atomic(state_path, state)
+                            print(f"  ✓ Cảnh {sid:03d}: Đã lưu {eff_raw.name}/{sid:03d}.png", flush=True)
+                        _save_pipeline_state_atomic(eff_state, state)
                     except Exception as exc:
                         failed_count += 1
                         shot = _save_debug_screenshot(page, f"error_scene_{sid:03d}_images.png")
                         _update_scene_state(state, sid, image_status="error", error=str(exc))
-                        _save_pipeline_state_atomic(state_path, state)
+                        _save_pipeline_state_atomic(eff_state, state)
                         print(f"  ✗ Cảnh {sid:03d}: LỖI tải ảnh ({exc}) | Ảnh debug: {shot}", flush=True)
 
                 for sid in unmatched_ids:
@@ -2292,7 +2467,7 @@ def run_images_mode(
                     msg = policy_msg or "Không khớp được thẻ ảnh mới trên lưới (có thể bị Flow ẩn hoặc timeout)."
                     shot = _save_debug_screenshot(page, f"{'policy' if is_pol else 'error'}_scene_{sid:03d}_images.png")
                     _update_scene_state(state, sid, image_status=st_name, error=msg)
-                    _save_pipeline_state_atomic(state_path, state)
+                    _save_pipeline_state_atomic(eff_state, state)
                     print(f"  ✗ Cảnh {sid:03d}: {st_name.upper()} ({msg}) | Ảnh debug: {shot}", flush=True)
 
                 if queue:
@@ -2312,24 +2487,30 @@ def run_videos_mode(
     *,
     concurrency: Optional[int] = None,
     frame_preset: Optional[str] = None,
+    assets_dir: Optional[Path] = None,
+    raw_dir: Optional[Path] = None,
+    state_path: Optional[Path] = None,
+    youtube_16x9: bool = False,
 ) -> int:
     """Chế độ --mode videos: chạy cảnh flow_video (10 tín dụng/clip) theo đợt song song + xác minh khung đầu + FFmpeg mute."""
     ep_dir = storyboard_path.parent
-    raw_dir = ep_dir / "raw_images"
-    assets_dir = ep_dir / "assets"
-    state_path = ep_dir / "pipeline_state.json"
-    state = _load_full_pipeline_state(state_path, data)
+    eff_raw = raw_dir or (ep_dir / ("raw_images_16x9" if youtube_16x9 else "raw_images"))
+    eff_assets = assets_dir or (ep_dir / ("assets_16x9" if youtube_16x9 else "assets"))
+    eff_state = state_path or (ep_dir / ("pipeline_state_16x9.json" if youtube_16x9 else "pipeline_state.json"))
+    eff_raw.mkdir(parents=True, exist_ok=True)
+    eff_assets.mkdir(parents=True, exist_ok=True)
+    state = _load_full_pipeline_state(eff_state, data)
     eff_fp = resolve_frame_preset(override=frame_preset, storyboard_preset=data.get("frame_preset"))
     aspect_plan = resolve_flow_aspect_plan(eff_fp, mode="videos")
 
-    # Đồng bộ pipeline_state cho các cảnh flow_video đã có sẵn thành phẩm assets/*.mp4
+    # Đồng bộ pipeline_state cho các cảnh flow_video đã có sẵn thành phẩm trong thư mục assets đích
     state_dirty = False
     for item in plan:
         if item.action == "SKIP_EXISTING_ASSET" and item.asset_type == "flow_video":
             _update_scene_state(state, item.scene_id, image_status="done", video_status="done", error="")
             state_dirty = True
     if state_dirty:
-        _save_pipeline_state_atomic(state_path, state)
+        _save_pipeline_state_atomic(eff_state, state)
 
     # Báo lỗi rõ các cảnh thiếu ảnh gốc
     missing_raw = [it for it in plan if it.action == "ERROR_MISSING_RAW"]
@@ -2353,22 +2534,24 @@ def run_videos_mode(
 
     print(
         f"[VIDEOS] Chế độ đồng loạt: {eff_conc} video/đợt (tổng {len(runnable)} video, "
-        f"{len(runnable) * 10} tín dụng Veo 3.1 - Lite).",
+        f"đích {eff_assets.name}/, {len(runnable) * 10} tín dụng Veo 3.1 - Lite).",
         flush=True,
     )
 
     failed_count = len(missing_raw)
     queue: List[ScenePlanItem] = []
+    start_frames_by_sid: Dict[int, Path] = {}
     for item in runnable:
         sid = item.scene_id
-        raw_png = raw_dir / f"{sid:03d}.png"
-        if not _file_ok(raw_png, MIN_IMAGE_BYTES):
+        start_frame = _find_video_start_frame(sid, eff_raw, eff_assets, youtube_16x9=youtube_16x9)
+        if start_frame is None:
             failed_count += 1
-            msg = f"Thiếu ảnh gốc raw_images/{sid:03d}.png"
+            msg = f"Thiếu ảnh khung đầu trong {eff_assets.name}/ hoặc {eff_raw.name}/ cho Cảnh {sid:03d}"
             _update_scene_state(state, sid, video_status="error", error=msg)
-            _save_pipeline_state_atomic(state_path, state)
+            _save_pipeline_state_atomic(eff_state, state)
             print(f"  ✗ Cảnh {sid:03d}: {msg} → bỏ qua.", flush=True)
         else:
+            start_frames_by_sid[sid] = start_frame
             queue.append(item)
 
     if not queue:
@@ -2411,7 +2594,7 @@ def run_videos_mode(
                     sc = item.scene_data
                     motion_prompt = str(sc.get("motion_prompt", "")).strip()
                     image_prompt = str(sc.get("image_prompt", "")).strip()
-                    raw_png = raw_dir / f"{sid:03d}.png"
+                    raw_png = start_frames_by_sid[sid]
 
                     cur_txt = _get_visible_body_text(page)
                     q_lim = _detect_queue_limit(cur_txt, baseline_text)
@@ -2466,7 +2649,7 @@ def run_videos_mode(
                         failed_count += 1
                         shot = _save_debug_screenshot(page, f"error_scene_{sid:03d}_videos.png")
                         _update_scene_state(state, sid, video_status="error", error=str(exc))
-                        _save_pipeline_state_atomic(state_path, state)
+                        _save_pipeline_state_atomic(eff_state, state)
                         print(f"  ✗ Cảnh {sid:03d}: LỖI khi gửi lệnh ({exc}) | Ảnh debug: {shot}", flush=True)
 
                 if deferred:
@@ -2492,7 +2675,7 @@ def run_videos_mode(
                         sid = sub["id"]
                         _save_debug_screenshot(page, f"policy_scene_{sid:03d}_videos.png")
                         _update_scene_state(state, sid, video_status="policy_error", error=str(pe))
-                    _save_pipeline_state_atomic(state_path, state)
+                    _save_pipeline_state_atomic(eff_state, state)
                     print(f"  ✗ Cảnh {[s['id'] for s in submitted]}: BỊ CHẶN POLICY ({pe})", flush=True)
                     continue
 
@@ -2509,11 +2692,11 @@ def run_videos_mode(
                         err_txt = tile.get("text") or policy_msg or "Google Flow từ chối tạo video (Policy)"
                         shot = _save_debug_screenshot(page, f"policy_scene_{sid:03d}_videos.png")
                         _update_scene_state(state, sid, video_status="policy_error", error=err_txt[:300])
-                        _save_pipeline_state_atomic(state_path, state)
+                        _save_pipeline_state_atomic(eff_state, state)
                         print(f"  ✗ Cảnh {sid:03d}: BỊ CHẶN POLICY ({err_txt[:120]}) | Ảnh debug: {shot}", flush=True)
                         continue
 
-                    tmp_mp4 = assets_dir / f"{sid:03d}.tmp.mp4"
+                    tmp_mp4 = eff_assets / f"{sid:03d}.tmp.mp4"
                     try:
                         _download_tile_by_uid(
                             page,
@@ -2528,20 +2711,20 @@ def run_videos_mode(
                         failed_count += 1
                         shot = _save_debug_screenshot(page, f"error_scene_{sid:03d}_videos.png")
                         _update_scene_state(state, sid, video_status="error", error=str(exc))
-                        _save_pipeline_state_atomic(state_path, state)
+                        _save_pipeline_state_atomic(eff_state, state)
                         print(f"  ✗ Cảnh {sid:03d}: LỖI tải video ({exc}) | Ảnh debug: {shot}", flush=True)
 
                 if len(downloaded_tmp) >= 2:
                     verified_map = _verify_and_assign_video_files_by_first_frame(
                         scene_raw_pngs,
                         list(downloaded_tmp.values()),
-                        raw_dir,
+                        eff_raw,
                     )
                 else:
                     verified_map = dict(downloaded_tmp)
 
                 for sid, src_mp4 in verified_map.items():
-                    dst_mp4 = assets_dir / f"{sid:03d}.mp4"
+                    dst_mp4 = eff_assets / f"{sid:03d}.mp4"
                     if downloaded_tmp.get(sid) != src_mp4:
                         print(
                             f"  [VERIFY] Đã tự hiệu chỉnh khớp khung hình đầu cho Cảnh {sid:03d} ({src_mp4.name})!",
@@ -2550,13 +2733,13 @@ def run_videos_mode(
                     try:
                         _strip_audio_ffmpeg(src_mp4, dst_mp4)
                         _update_scene_state(state, sid, video_status="done", error="")
-                        _save_pipeline_state_atomic(state_path, state)
+                        _save_pipeline_state_atomic(eff_state, state)
                         size_mb = dst_mp4.stat().st_size / (1024 * 1024)
-                        print(f"  ✓ Cảnh {sid:03d}: Đã xuất assets/{sid:03d}.mp4 ({size_mb:.2f} MB, đã mute FFmpeg)", flush=True)
+                        print(f"  ✓ Cảnh {sid:03d}: Đã xuất {eff_assets.name}/{sid:03d}.mp4 ({size_mb:.2f} MB, đã mute FFmpeg)", flush=True)
                     except Exception as exc:
                         failed_count += 1
                         _update_scene_state(state, sid, video_status="error", error=str(exc))
-                        _save_pipeline_state_atomic(state_path, state)
+                        _save_pipeline_state_atomic(eff_state, state)
                         print(f"  ✗ Cảnh {sid:03d}: LỖI FFmpeg ({exc})", flush=True)
 
                 for tmp_f in downloaded_tmp.values():
@@ -2569,7 +2752,7 @@ def run_videos_mode(
                     msg = policy_msg or "Không khớp được thẻ video mới trên lưới (có thể bị Flow ẩn hoặc timeout)."
                     shot = _save_debug_screenshot(page, f"{'policy' if is_pol else 'error'}_scene_{sid:03d}_videos.png")
                     _update_scene_state(state, sid, video_status=st_name, error=msg)
-                    _save_pipeline_state_atomic(state_path, state)
+                    _save_pipeline_state_atomic(eff_state, state)
                     print(f"  ✗ Cảnh {sid:03d}: {st_name.upper()} ({msg}) | Ảnh debug: {shot}", flush=True)
 
                 if queue:
@@ -2654,6 +2837,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Ghi đè frame_preset từ storyboard.json (portrait_9_16 | framed_4_5 | framed_1_1 | landscape_16_9).",
     )
+    parser.add_argument(
+        "--youtube-16x9",
+        action="store_true",
+        help="Chế độ sản xuất song song YouTube 16:9: ép landscape_16_9, lưu vào raw_images_16x9/ và assets_16x9/ (không đụng assets/ TikTok).",
+    )
+    parser.add_argument(
+        "--assets-dir",
+        type=Path,
+        default=None,
+        help="Thư mục đầu ra tùy chỉnh cho ảnh/video thành phẩm (mặc định assets/ hoặc assets_16x9/).",
+    )
+    parser.add_argument(
+        "--raw-dir",
+        type=Path,
+        default=None,
+        help="Thư mục ảnh gốc tùy chỉnh (mặc định raw_images/ hoặc raw_images_16x9/).",
+    )
     return parser
 
 
@@ -2688,10 +2888,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"[ABORT] Các cảnh không tồn tại trong storyboard: {unknown}")
             return 1
 
-    eff_fp = resolve_frame_preset(override=args.frame_preset, storyboard_preset=data.get("frame_preset"))
+    ep_dir = storyboard_path.parent
+    eff_fp, eff_assets, eff_raw, eff_state = resolve_io_paths(
+        ep_dir,
+        youtube_16x9=bool(args.youtube_16x9),
+        assets_dir=args.assets_dir,
+        raw_dir=args.raw_dir,
+        frame_preset=args.frame_preset,
+        storyboard_preset=data.get("frame_preset"),
+    )
 
     # 2. Lập kế hoạch thực thi
-    ep_dir = storyboard_path.parent
     plan = _build_execution_plan(
         ep_dir,
         data,
@@ -2699,6 +2906,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         selected_ids=selected_ids,
         limit=args.limit,
         force=args.force,
+        assets_dir=eff_assets,
+        raw_dir=eff_raw,
+        state_path=eff_state,
+        youtube_16x9=bool(args.youtube_16x9),
     )
     run_count, total_credits = _print_plan_table(
         storyboard_path,
@@ -2706,6 +2917,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         plan,
         dry_run=args.dry_run,
         frame_preset=eff_fp.name,
+        assets_dir=eff_assets,
+        raw_dir=eff_raw,
     )
 
     eff_conc = _resolve_concurrency(cfg, args.mode, args.concurrency)
@@ -2727,8 +2940,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("[CANCELLED] Đã hủy theo yêu cầu người dùng. Không tốn tín dụng.")
             return 0
 
-    # 4. Đồng bộ/khởi tạo thư mục & pipeline_state.json (idempotent — giữ nguyên trạng thái done cũ)
-    sync_episode_files(storyboard_path, data)
+    # 4. Đồng bộ/khởi tạo thư mục & state (youtube-16x9 giữ nguyên 100% assets/ & pipeline_state.json của TikTok)
+    if args.youtube_16x9 or args.assets_dir is not None or args.raw_dir is not None:
+        eff_assets.mkdir(parents=True, exist_ok=True)
+        eff_raw.mkdir(parents=True, exist_ok=True)
+        _ensure_custom_pipeline_state(
+            eff_state,
+            data,
+            assets_rel=eff_assets.name,
+            raw_rel=eff_raw.name,
+            frame_preset=eff_fp.name,
+        )
+    else:
+        sync_episode_files(storyboard_path, data)
 
     # 5. Chạy thật trên Chrome CDP
     try:
@@ -2741,6 +2965,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 cdp_url,
                 concurrency=args.concurrency,
                 frame_preset=eff_fp.name,
+                assets_dir=eff_assets,
+                raw_dir=eff_raw,
+                state_path=eff_state,
             )
         return run_videos_mode(
             storyboard_path,
@@ -2750,6 +2977,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             cdp_url,
             concurrency=args.concurrency,
             frame_preset=eff_fp.name,
+            assets_dir=eff_assets,
+            raw_dir=eff_raw,
+            state_path=eff_state,
+            youtube_16x9=bool(args.youtube_16x9),
         )
     except SafetyAssertionError as se:
         print(f"\n🛑 {se}")

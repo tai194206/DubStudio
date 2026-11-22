@@ -79,13 +79,13 @@ def test_flow_aspect_plan_all_four_presets():
     assert p916.target_size == (1080, 1920)
 
     p45 = flow_bot.resolve_flow_aspect_plan("framed_4_5")
-    assert p45.preferred == ("4:5", "3:4")
+    assert p45.preferred == ("3:4", "4:5")
     assert p45.fallback[0] == "9:16"
     assert p45.target_size == (1080, 1350)
 
     p11 = flow_bot.resolve_flow_aspect_plan("framed_1_1")
     assert p11.preferred[0] == "1:1"
-    assert p11.fallback[0] == "16:9"
+    assert p11.fallback[:2] == ("4:3", "16:9")
     assert p11.target_size == (1080, 1080)
 
     p169 = flow_bot.resolve_flow_aspect_plan("landscape_16_9")
@@ -95,24 +95,27 @@ def test_flow_aspect_plan_all_four_presets():
 
 
 def test_select_aspect_ratio_option_full_and_fallback_ui():
-    # UI đầy đủ có 4:5 và 1:1
-    page_full_45 = _FakeFlowPage(["9:16", "16:9", "1:1", "4:5"])
+    # UI thực tế của Google Flow có 5 nút: 16:9, 4:3, 1:1, 3:4, 9:16
+    page_full_45 = _FakeFlowPage(["9:16", "16:9", "1:1", "3:4", "4:3"])
     chosen_45 = flow_bot._select_aspect_ratio_option(page_full_45, flow_bot.resolve_flow_aspect_plan("framed_4_5"))
-    assert chosen_45 == "4:5"
+    assert chosen_45 == "3:4"
     assert page_full_45.radios[3].clicked is True
     assert not page_full_45.text_node_clicked
 
-    page_full_11 = _FakeFlowPage(["9:16", "16:9", "1:1", "4:5"])
+    page_full_11 = _FakeFlowPage(["9:16", "16:9", "1:1", "3:4", "4:3"])
     chosen_11 = flow_bot._select_aspect_ratio_option(page_full_11, flow_bot.resolve_flow_aspect_plan("framed_1_1"))
     assert chosen_11 == "1:1"
     assert page_full_11.radios[2].clicked is True
 
-    # UI rút gọn chỉ có 9:16 và 16:9 -> 4:5 fallback sang 9:16, 1:1 fallback sang 16:9
-    page_min_45 = _FakeFlowPage(["9:16", "16:9"])
-    fb_45 = flow_bot._select_aspect_ratio_option(page_min_45, flow_bot.resolve_flow_aspect_plan("framed_4_5"))
+    # Không có 3:4 -> framed_4_5 fallback sang 9:16; không có 1:1 -> framed_1_1 fallback sang 4:3 rồi 16:9
+    page_no_11_34 = _FakeFlowPage(["9:16", "16:9", "4:3"])
+    fb_45 = flow_bot._select_aspect_ratio_option(page_no_11_34, flow_bot.resolve_flow_aspect_plan("framed_4_5"))
     assert fb_45 == "9:16"
-    assert page_min_45.radios[0].clicked is True
+    fb_11_43 = flow_bot._select_aspect_ratio_option(page_no_11_34, flow_bot.resolve_flow_aspect_plan("framed_1_1"))
+    assert fb_11_43 == "4:3"
+    assert page_no_11_34.radios[2].clicked is True
 
+    # UI rút gọn chỉ có 9:16 và 16:9 -> framed_1_1 fallback sang 16:9
     page_min_11 = _FakeFlowPage(["9:16", "16:9"])
     fb_11 = flow_bot._select_aspect_ratio_option(page_min_11, flow_bot.resolve_flow_aspect_plan("framed_1_1"))
     assert fb_11 == "16:9"
@@ -466,3 +469,291 @@ def test_search_wikimedia_respects_exclude_modern_flag():
         _FakeSession(), ["Dien Bien Phu"], filetype="bitmap", limit=10, exclude_modern=False
     )
     assert len(unfiltered) == 2
+
+
+def test_adapt_prompt_for_frame_preset_v54():
+    src = (
+        "Archival sepia ink and watercolor painting, upright 9:16 portrait, "
+        "vertical framing, 4:5 vertical framing, Viet Minh soldiers hauling artillery at Dien Bien Phu 1954."
+    )
+    same = flow_bot.adapt_prompt_for_frame_preset(src, "portrait_9_16")
+    assert same == src
+
+    adapted = flow_bot.adapt_prompt_for_frame_preset(src, "landscape_16_9")
+    assert "9:16" not in adapted
+    assert "4:5" not in adapted
+    assert "16:9 widescreen" in adapted.lower()
+    assert "Dien Bien Phu 1954" in adapted
+
+
+def test_youtube_16x9_io_paths_execution_plan_and_video_start_frame(tmp_path):
+    from PIL import Image
+
+    ep_dir = tmp_path / "Tap_01"
+    assets_tiktok = ep_dir / "assets"
+    raw_tiktok = ep_dir / "raw_images"
+    assets_169 = ep_dir / "assets_16x9"
+    raw_169 = ep_dir / "raw_images_16x9"
+    assets_tiktok.mkdir(parents=True)
+    raw_tiktok.mkdir(parents=True)
+    assets_169.mkdir(parents=True)
+    raw_169.mkdir(parents=True)
+
+    # Tạo sẵn 001.jpg trong assets_16x9 (giả lập ảnh tư liệu bản ngang đã nạp)
+    Image.new("RGB", (1920, 1080), (40, 60, 80)).save(assets_169 / "001.jpg")
+    # Tạo 003.png CHỈ trong assets/ (bản TikTok), KHÔNG có trong assets_16x9/ hay raw_images_16x9/
+    Image.new("RGB", (1080, 1350), (120, 30, 30)).save(assets_tiktok / "003.png")
+
+    sb_data = {
+        "episode_name": "Tap_01",
+        "frame_preset": "framed_4_5",
+        "scenes": [
+            {"id": 1, "asset_type": "static_image", "speech": "Cảnh 1", "image_prompt": "9:16 portrait"},
+            {"id": 2, "asset_type": "flow_video", "speech": "Cảnh 2", "image_prompt": "4:5 framing", "video_prompt": "pan"},
+            {"id": 3, "asset_type": "flow_video", "speech": "Cảnh 3", "image_prompt": "vertical framing", "video_prompt": "zoom"},
+        ],
+    }
+
+    fp, out_assets, out_raw, out_state = flow_bot.resolve_io_paths(
+        ep_dir, youtube_16x9=True, storyboard_preset=sb_data["frame_preset"]
+    )
+    assert fp.name == "landscape_16_9"
+    assert out_assets == assets_169
+    assert out_raw == raw_169
+    assert out_state == ep_dir / "pipeline_state_16x9.json"
+
+    plan = flow_bot._build_execution_plan(
+        ep_dir,
+        sb_data,
+        "images",
+        selected_ids=None,
+        limit=None,
+        force=False,
+        assets_dir=out_assets,
+        raw_dir=out_raw,
+        state_path=out_state,
+        youtube_16x9=True,
+    )
+    by_id = {item.scene_id: item for item in plan}
+    assert by_id[1].action == "SKIP_EXISTING_ASSET"  # 001.jpg đã có trong assets_16x9/ được bảo vệ
+    assert by_id[2].action == "RUN"
+    assert by_id[3].action == "RUN"   # Không bị đánh lừa bởi assets/003.png của TikTok
+
+    # Tạo frame đầu 16:9 cho cảnh 2 trong raw_images_16x9 -> video mode nhận đúng, không lùi sang assets/003.png
+    import os
+
+    Image.frombytes("RGB", (320, 180), os.urandom(320 * 180 * 3)).save(raw_169 / "002.png")
+    assert flow_bot._find_video_start_frame(2, out_raw, out_assets, youtube_16x9=True) == raw_169 / "002.png"
+    assert flow_bot._find_video_start_frame(3, out_raw, out_assets, youtube_16x9=True) is None
+
+    vplan = flow_bot._build_execution_plan(
+        ep_dir,
+        sb_data,
+        "videos",
+        selected_ids=None,
+        limit=None,
+        force=False,
+        assets_dir=out_assets,
+        raw_dir=out_raw,
+        state_path=out_state,
+        youtube_16x9=True,
+    )
+    vby_id = {item.scene_id: item for item in vplan}
+    assert vby_id[2].action == "RUN"
+    assert vby_id[3].action == "ERROR_MISSING_RAW"
+
+    parser = flow_bot.build_arg_parser()
+    parsed = parser.parse_args([str(ep_dir / "storyboard.json"), "--youtube-16x9", "--mode", "images"])
+    assert parsed.youtube_16x9 is True
+    assert parsed.mode == "images"
+
+
+def test_run_episode_youtube_16x9_inspect_and_flags(tmp_path):
+    import run_episode
+    from PIL import Image
+
+    ep_dir = tmp_path / "Tap_02"
+    (ep_dir / "assets").mkdir(parents=True)
+    (ep_dir / "assets_16x9").mkdir(parents=True)
+    (ep_dir / "assets" / "full_audio.mp3").write_bytes(b"ID3")
+    Image.new("RGB", (1080, 1920), (10, 20, 30)).save(ep_dir / "assets" / "001.png")
+    Image.new("RGB", (1080, 1920), (20, 30, 40)).save(ep_dir / "assets" / "002.png")
+    Image.new("RGB", (1920, 1080), (30, 40, 50)).save(ep_dir / "assets_16x9" / "001.jpg")
+
+    sb_data = {
+        "episode_name": "Tap_02",
+        "frame_preset": "portrait_9_16",
+        "scenes": [
+            {"id": 1, "asset_type": "static_image", "speech": "Cảnh 1", "image_prompt": "a"},
+            {"id": 2, "asset_type": "flow_video", "speech": "Cảnh 2", "image_prompt": "b", "video_prompt": "v"},
+        ],
+    }
+    status = run_episode.inspect_episode_status(ep_dir, sb_data, youtube_16x9=True)
+    assert status["frame_preset"] == "landscape_16_9"
+    assert status["youtube_16x9"] is True
+    assert status["assets_dir_name"] == "assets_16x9"
+    assert status["raw_dir_name"] == "raw_images_16x9"
+    assert status["out_size"] == "1920x1080"
+    assert status["has_audio"] is True
+    assert status["done_assets"] == [1]
+    assert status["missing_assets"] == [2]
+    assert status["pending_flow_videos"] == [2]
+
+    args = run_episode.build_arg_parser().parse_args(
+        [str(ep_dir), "--phase", "all", "--youtube-16x9"]
+    )
+    assert args.youtube_16x9 is True
+    assert args.phase == "all"
+
+
+def test_fetch_archive_commit_image_youtube_16x9_and_preserve_tiktok(tmp_path):
+    from PIL import Image
+
+    ep_dir = tmp_path / "Tap_01"
+    (ep_dir / "assets").mkdir(parents=True)
+    sb_data = {
+        "episode_name": "Tap_01",
+        "frame_preset": "framed_4_5",
+        "scenes": [{"id": 1, "asset_type": "static_image", "speech": "Tư liệu", "image_prompt": "x"}],
+    }
+    (ep_dir / "storyboard.json").write_text(json.dumps(sb_data, ensure_ascii=False), encoding="utf-8")
+
+    src_img = tmp_path / "archival_src.jpg"
+    Image.new("RGB", (2400, 1600), (110, 95, 80)).save(src_img)
+
+    # 1. Nạp bản TikTok trước (không truyền --target-size -> giữ nguyên kích thước 2400x1600)
+    rc_tt = fetch_archive_media.main(
+        [
+            "--mode",
+            "commit-image",
+            "--episode-dir",
+            str(ep_dir),
+            "--scene",
+            "1",
+            "--input",
+            str(src_img),
+            "--license",
+            "CC BY-SA 2.0",
+            "--source-url",
+            "https://commons.wikimedia.org/wiki/File:Demo1954.jpg",
+        ]
+    )
+    assert rc_tt == 0
+    with Image.open(ep_dir / "assets" / "001.jpg") as im_tt:
+        assert im_tt.size == (2400, 1600)
+
+    # 2. Nạp bản YouTube 16:9 song song -> assets_16x9/001.jpg (1920x1080), giữ nguyên assets/001.jpg
+    rc_yt = fetch_archive_media.main(
+        [
+            "--mode",
+            "commit-image",
+            "--episode-dir",
+            str(ep_dir),
+            "--scene",
+            "1",
+            "--input",
+            str(src_img),
+            "--youtube-16x9",
+            "--license",
+            "CC BY-SA 2.0",
+            "--source-url",
+            "https://commons.wikimedia.org/wiki/File:Demo1954.jpg",
+        ]
+    )
+    assert rc_yt == 0
+    with Image.open(ep_dir / "assets" / "001.jpg") as im_tt_after:
+        assert im_tt_after.size == (2400, 1600)
+    with Image.open(ep_dir / "assets_16x9" / "001.jpg") as im_yt:
+        assert im_yt.size == (1920, 1080)
+
+    src_json = json.loads((ep_dir / "archive_sources.json").read_text(encoding="utf-8"))
+    entry = src_json["assets"]["001"]
+    assert entry["asset_file"] == "assets/001.jpg"
+    assert entry["asset_file_16x9"] == "assets_16x9/001.jpg"
+    assert entry["resolution_16x9"] == "1920x1080"
+
+
+def test_validate_storyboard_accepts_optional_chapter_title_and_is_cta(tmp_path):
+    import validate_storyboard
+
+    ep_dir = tmp_path / "Tap_03"
+    ep_dir.mkdir(parents=True)
+
+    speech1 = "Mở đầu chiến dịch lịch sử năm 1954."
+    speech2 = "Theo dõi phần tiếp theo của loạt phim."
+    sb = {
+        "version": "2.0",
+        "title": "Tap_03",
+        "chapter_title": "Khởi công kéo pháo",
+        "frame_preset": "framed_4_5",
+        "era_branch": "can_hien_dai",
+        "ratio_tier": "0_100",
+        "aspect_ratio": "4:5",
+        "locations": {"loc_1": "001.jpg", "loc_2": "002.jpg"},
+        "full_script_for_elevenlabs": f"{speech1} {speech2}",
+        "beats": [
+            {
+                "id": 1,
+                "start_sec": 0.0,
+                "end_sec": 3.5,
+                "text": speech1,
+                "location": "loc_1",
+                "sfx": "boom",
+                "intent": "establish",
+                "intensity": 2,
+            },
+            {
+                "id": 2,
+                "start_sec": 3.5,
+                "end_sec": 7.0,
+                "text": speech2,
+                "location": "loc_2",
+                "sfx": "none",
+                "intent": "explain",
+                "intensity": 1,
+            },
+        ],
+        "scenes": [
+            {
+                "id": 1,
+                "speech": speech1,
+                "on_screen_text": "KEO PHAO 1954",
+                "asset_type": "static_image",
+                "motion": "zoom_in",
+                "ken_burns": "zoom_in",
+                "sfx": "boom",
+                "image_prompt": "4:5 vertical framing, archival 1954 Vietnam artillery crew pulling cannons up muddy mountain slope, monochrome documentary film grain, no text",
+                "duration_sec": 3.5,
+            },
+            {
+                "id": 2,
+                "speech": speech2,
+                "on_screen_text": "PHAN TIEP THEO",
+                "asset_type": "static_image",
+                "motion": "static",
+                "ken_burns": "static",
+                "sfx": "none",
+                "image_prompt": "4:5 vertical framing, 1954 archival map of Muong Thanh basin with ink contours, aged paper texture, no text",
+                "duration_sec": 3.5,
+                "is_cta": True,
+            },
+        ],
+    }
+    sb_path = ep_dir / "storyboard.json"
+    sb_path.write_text(json.dumps(sb, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    reports, _data, _stats = validate_storyboard.validate_storyboard(sb_path)
+    all_errors = [item for r in reports for item in r.errors]
+    assert all_errors == []
+    assert validate_storyboard.main([str(sb_path)]) == 0
+
+    # Giá trị sai kiểu cho chapter_title / is_cta phải bị Tầng 1 báo lỗi
+    bad_sb = json.loads(json.dumps(sb))
+    bad_sb["chapter_title"] = 123
+    bad_sb["scenes"][1]["is_cta"] = "yes"
+    bad_path = ep_dir / "storyboard_bad.json"
+    bad_path.write_text(json.dumps(bad_sb, ensure_ascii=False, indent=2), encoding="utf-8")
+    bad_reports, _, _ = validate_storyboard.validate_storyboard(bad_path)
+    t1_errors = bad_reports[0].errors
+    assert any("chapter_title" in err for err in t1_errors)
+    assert any("is_cta" in err for err in t1_errors)

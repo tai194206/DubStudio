@@ -911,7 +911,38 @@ def _lookup_candidate_meta(src_file: Path) -> Dict[str, Any]:
     return {}
 
 
-def _update_archive_sources(episode_dir: Path, scene_id: int, entry: Dict[str, Any]) -> Path:
+def _resolve_commit_assets_dir(ep_dir: Path, args: argparse.Namespace) -> Path:
+    raw_dir = getattr(args, "assets_dir", None)
+    if raw_dir:
+        p = Path(raw_dir)
+        return p.resolve() if p.is_absolute() else (ep_dir / p).resolve()
+    if getattr(args, "youtube_16x9", False):
+        return (ep_dir / "assets_16x9").resolve()
+    return (ep_dir / "assets").resolve()
+
+
+def _parse_target_size(args: argparse.Namespace) -> Optional[Tuple[int, int]]:
+    raw = str(getattr(args, "target_size", "") or "").strip().lower()
+    if raw:
+        m = re.fullmatch(r"(\d{2,5})\s*[x×:,]\s*(\d{2,5})", raw)
+        if not m:
+            raise ValueError(f"--target-size phải có dạng WxH (vd: 1920x1080), nhận: '{raw}'")
+        w, h = int(m.group(1)), int(m.group(2))
+        if w < 64 or h < 64:
+            raise ValueError(f"--target-size quá nhỏ: {w}x{h}")
+        return w - (w % 2), h - (h % 2)
+    if getattr(args, "youtube_16x9", False):
+        return (1920, 1080)
+    return None
+
+
+def _update_archive_sources(
+    episode_dir: Path,
+    scene_id: int,
+    entry: Dict[str, Any],
+    *,
+    is_parallel_16x9: bool = False,
+) -> Path:
     sources_path = episode_dir / "archive_sources.json"
     payload: Dict[str, Any] = {"episode": episode_dir.name, "updated_at": "", "assets": {}}
     if sources_path.is_file():
@@ -923,9 +954,24 @@ def _update_archive_sources(episode_dir: Path, scene_id: int, entry: Dict[str, A
                     payload["assets"] = {}
         except Exception:
             pass
+    key = f"{scene_id:03d}"
     payload["episode"] = episode_dir.name
     payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
-    payload["assets"][f"{scene_id:03d}"] = entry
+
+    existing = payload["assets"].get(key)
+    if is_parallel_16x9 and isinstance(existing, dict):
+        merged = dict(existing)
+        merged["asset_file_16x9"] = entry.get("asset_file", "")
+        merged["resolution_16x9"] = entry.get("resolution", "")
+        merged["sha256_16x9"] = entry.get("sha256", "")
+        merged["updated_16x9_at"] = entry.get("committed_at", "")
+        for k in ("title", "provider", "author", "year_or_date", "license", "source_url"):
+            if not merged.get(k) and entry.get(k):
+                merged[k] = entry[k]
+        payload["assets"][key] = merged
+    else:
+        payload["assets"][key] = entry
+
     payload["assets"] = dict(sorted(payload["assets"].items(), key=lambda kv: kv[0]))
     sources_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return sources_path
@@ -950,9 +996,10 @@ def run_mode_commit_image(args: argparse.Namespace) -> int:
     if not src.is_file():
         raise FileNotFoundError(f"Không tìm thấy ảnh đầu vào: {src}")
     ep_dir = Path(args.episode_dir).resolve()
-    assets_dir = ep_dir / "assets"
+    assets_dir = _resolve_commit_assets_dir(ep_dir, args)
     assets_dir.mkdir(parents=True, exist_ok=True)
     out_jpg = assets_dir / f"{args.scene:03d}.jpg"
+    target_size = _parse_target_size(args)
 
     crop_margins_raw = str(getattr(args, "crop_margins", "") or "").strip()
     with Image.open(src) as img:
@@ -973,16 +1020,20 @@ def run_mode_commit_image(args: argparse.Namespace) -> int:
                     f"--crop-margins={crop_margins_raw} vượt quá vùng hợp lệ của ảnh {w0}x{h0}"
                 )
             rgb = rgb.crop((ml, mt, w0 - mr, h0 - mb))
-        # Giữ nguyên tỉ lệ tự nhiên cho Ken Burns, chỉ thu gọn nếu vượt quá 3840px để tối ưu dung lượng
-        if max(rgb.size) > 3840:
+
+        if target_size is not None:
+            rgb = ImageOps.fit(rgb, target_size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.35))
+        elif max(rgb.size) > 3840:
+            # Giữ nguyên tỉ lệ tự nhiên cho Ken Burns, chỉ thu gọn nếu vượt quá 3840px để tối ưu dung lượng
             rgb.thumbnail((3840, 3840), Image.Resampling.LANCZOS)
         w, h = rgb.size
         rgb.save(out_jpg, format="JPEG", quality=95, subsampling=0)
 
+    is_parallel = assets_dir.name != "assets"
     meta = _merge_source_meta(src, args)
     entry = {
         "scene_id": args.scene,
-        "asset_file": f"assets/{out_jpg.name}",
+        "asset_file": f"{assets_dir.name}/{out_jpg.name}",
         "media_type": "image",
         "title": meta.get("title") or src.name,
         "provider": meta.get("provider") or "manual_archive",
@@ -996,7 +1047,7 @@ def run_mode_commit_image(args: argparse.Namespace) -> int:
         "note": getattr(args, "note", "") or "",
         "committed_at": datetime.now().isoformat(timespec="seconds"),
     }
-    sources_path = _update_archive_sources(ep_dir, args.scene, entry)
+    sources_path = _update_archive_sources(ep_dir, args.scene, entry, is_parallel_16x9=is_parallel)
     print(f"✓ Đã nạp ảnh: {out_jpg} ({w}x{h}) | Nguồn đã lưu tại: {sources_path}")
     return 0
 
@@ -1063,9 +1114,10 @@ def run_mode_commit_video(args: argparse.Namespace) -> int:
         dur_s = max(0.5, in_dur - start_s)
 
     ep_dir = Path(args.episode_dir).resolve()
-    assets_dir = ep_dir / "assets"
+    assets_dir = _resolve_commit_assets_dir(ep_dir, args)
     assets_dir.mkdir(parents=True, exist_ok=True)
     out_mp4 = assets_dir / f"{args.scene:03d}.mp4"
+    target_size = _parse_target_size(args)
 
     vf_parts: List[str] = []
     crop_expr = None
@@ -1073,7 +1125,16 @@ def run_mode_commit_video(args: argparse.Namespace) -> int:
         crop_expr = _detect_black_bar_crop(ffmpeg_bin, src, start_s, in_info["width"], in_info["height"])
         if crop_expr:
             vf_parts.append(crop_expr)
-    vf_parts.extend(["fps=30", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "setsar=1"])
+    if target_size is not None:
+        tw, th = target_size
+        vf_parts.extend([
+            "fps=30",
+            f"scale={tw}:{th}:force_original_aspect_ratio=increase",
+            f"crop={tw}:{th}:(iw-{tw})/2:(ih-{th})*0.35",
+            "setsar=1",
+        ])
+    else:
+        vf_parts.extend(["fps=30", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "setsar=1"])
 
     cmd = [
         ffmpeg_bin,
@@ -1105,10 +1166,11 @@ def run_mode_commit_video(args: argparse.Namespace) -> int:
     if not out_info.get("has_video") or out_info.get("has_audio"):
         raise RuntimeError(f"Kiểm định đầu ra thất bại (has_video={out_info.get('has_video')}, has_audio={out_info.get('has_audio')})")
 
+    is_parallel = assets_dir.name != "assets"
     meta = _merge_source_meta(src, args)
     entry = {
         "scene_id": args.scene,
-        "asset_file": f"assets/{out_mp4.name}",
+        "asset_file": f"{assets_dir.name}/{out_mp4.name}",
         "media_type": "video",
         "title": meta.get("title") or src.name,
         "provider": meta.get("provider") or "manual_archive",
@@ -1125,7 +1187,7 @@ def run_mode_commit_video(args: argparse.Namespace) -> int:
         "note": getattr(args, "note", "") or "",
         "committed_at": datetime.now().isoformat(timespec="seconds"),
     }
-    sources_path = _update_archive_sources(ep_dir, args.scene, entry)
+    sources_path = _update_archive_sources(ep_dir, args.scene, entry, is_parallel_16x9=is_parallel)
     print(
         f"✓ Đã cắt & nạp video: {out_mp4} ({entry['resolution']}, {entry['trim_duration_sec']}s, -an mute)"
         + (f" [crop={crop_expr}]" if crop_expr else "")
@@ -1172,7 +1234,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Tham số commit-image & commit-video
     p.add_argument("--input", help="Đường dẫn ảnh hoặc video ứng viên đã duyệt.")
-    p.add_argument("--scene", type=int, help="Số thứ tự cảnh đích (1 -> assets/001.jpg hoặc assets/001.mp4).")
+    p.add_argument("--scene", type=int, help="Số thứ tự cảnh đích (1 -> assets/001.jpg hoặc assets_16x9/001.jpg).")
+    p.add_argument("--assets-dir", "--output-dir", dest="assets_dir", help="Thư mục đích khi commit (mặc định assets/ hoặc assets_16x9/ nếu bật --youtube-16x9).")
+    p.add_argument("--youtube-16x9", action="store_true", help="Nạp tư liệu bản ngang 1920x1080 vào <episode_dir>/assets_16x9/ không đụng assets/ cũ.")
+    p.add_argument("--target-size", help="Kích thước chuẩn hóa đầu ra dạng WxH (vd: 1920x1080).")
     p.add_argument("--start", type=float, default=0.0, help="Mốc bắt đầu cắt video theo giây (mặc định: 0.0).")
     p.add_argument("--duration", type=float, default=6.0, help="Độ dài đoạn video cần cắt theo giây (mặc định: 6.0).")
     p.add_argument("--no-crop-black-bars", action="store_true", help="Tắt tự động dò cắt viền đen ở chế độ commit-video.")

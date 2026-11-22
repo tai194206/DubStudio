@@ -17,6 +17,7 @@ from core.ffmpeg_utils import find_binary
 from core.reporter import Reporter
 
 from .downloader_tab import DownloaderTab
+from .series_youtube_tab import SeriesYouTubeTab
 from .settings_tab import SettingsTab
 from .story_tab import StoryTab
 from .studio_tab import StudioTab
@@ -46,12 +47,14 @@ class App(tk.Tk):
 
         self.studio = StudioTab(self.notebook, self)
         self.story_tab = StoryTab(self.notebook, self)
+        self.series_youtube_tab = SeriesYouTubeTab(self.notebook, self)
         self.downloader = DownloaderTab(self.notebook, self)
         self.translator = TranslatorTab(self.notebook, self)
         self.settings_tab = SettingsTab(self.notebook, self)
 
         self.notebook.add(self.studio, text="  🎙️ Dub Studio  ")
         self.notebook.add(self.story_tab, text="  📱 Story Studio 9:16  ")
+        self.notebook.add(self.series_youtube_tab, text="  📺 YouTube 16:9  ")
         self.notebook.add(self.downloader, text="  ⬇️ Tải video  ")
         self.notebook.add(self.translator, text="  🌐 Dịch kịch bản  ")
         self.notebook.add(self.settings_tab, text="  ⚙️ Cài đặt  ")

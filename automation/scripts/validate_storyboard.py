@@ -293,6 +293,10 @@ def validate_storyboard(path: Path) -> Tuple[List[TierReport], Optional[Dict[str
     if not isinstance(title_val, str) or not title_val.strip():
         t1.errors.append("Thiếu khóa bắt buộc 'title' hoặc giá trị rỗng.")
 
+    if "chapter_title" in data and data["chapter_title"] is not None:
+        if not isinstance(data["chapter_title"], str):
+            t1.errors.append("Trường tùy chọn 'chapter_title' phải là chuỗi (str).")
+
     scenes_raw = data.get("scenes")
     if not isinstance(scenes_raw, list) or len(scenes_raw) == 0:
         t1.errors.append("Danh sách 'scenes' bị thiếu hoặc rỗng.")
@@ -305,6 +309,8 @@ def validate_storyboard(path: Path) -> Tuple[List[TierReport], Optional[Dict[str
             t1.errors.append(f"scenes[{idx}] không phải JSON object (dict).")
             continue
         scenes.append(sc)
+        if "is_cta" in sc and sc["is_cta"] is not None and not isinstance(sc["is_cta"], bool):
+            t1.errors.append(f"scenes[{idx}] có 'is_cta'={sc['is_cta']!r} phải là boolean (true/false).")
         if "scene_id" in sc:
             t1.errors.append(f"scenes[{idx}] dùng 'scene_id' — phải đổi thành 'id'.")
         if "id" not in sc:
