@@ -262,7 +262,7 @@ _VERTICAL_CUE_PATTERNS: Tuple[re.Pattern[str], ...] = (
     ),
     re.compile(r"\bsubject\s+centered\s+within\s+4:5\s+safe\s+zone\b", re.I),
     re.compile(r"\b1:1\s+square(?:\s+archival)?\s+framing(?:\s*,\s*centered\s+subject)?", re.I),
-    re.compile(r"\b(?:vertical\s+framing|portrait\s+orientation|upright\s+orientation)\b", re.I),
+    re.compile(r"\b(?:vertical\s+framing|(?:upright\s+)?portrait\s+orientation|upright\s+orientation)\b", re.I),
     re.compile(r"(?<![0-9.])(?:9:16|4:5|1:1)(?![0-9.])"),
 )
 
@@ -299,6 +299,72 @@ def adapt_prompt_for_frame_preset(
         tail = cleaned[m_notext.start() :].lstrip(" ,")
         return f"{head}, {WIDESCREEN_16_9_CUE}, {tail}" if head else f"{WIDESCREEN_16_9_CUE}, {tail}"
     return f"{cleaned}, {WIDESCREEN_16_9_CUE}" if cleaned else WIDESCREEN_16_9_CUE
+
+
+_ARCHIVAL_STRIP_PATTERNS: Tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bcinematic\s+historical\s+documentary\s+2d\s+semi-realistic\s+painted\s+illustration\b", re.I),
+    re.compile(r"\b2d\s+semi-realistic\s+painted\s+illustration\b", re.I),
+    re.compile(r"\bepic\s+2d\s+historical\s+animation\s+style\b", re.I),
+    re.compile(r"\brich\s+cinematic\s+cel-shading\b", re.I),
+    re.compile(r"\bclean\s+(?:delicate\s+)?lineart\b", re.I),
+    re.compile(r"\bfine\s+painterly\s+brushstrokes\b", re.I),
+    re.compile(r"\bpainterly\s+brushstrokes\b", re.I),
+    re.compile(r"\bmoody\s+blue\s+and\s+warm\s+sunset\s+contrast\b", re.I),
+    re.compile(r"\bwarm\s+dramatic\s+lighting\b", re.I),
+    re.compile(r"\bdramatic\s+rim\s+lighting\b", re.I),
+    re.compile(r"\bunder\s+a?\s*fiery\s+amber\s+sky\b", re.I),
+    re.compile(r"\bfiery\s+amber\s+sky\b", re.I),
+    re.compile(r"\bunder\s+harsh\s+afternoon\s+sunlight\b", re.I),
+    re.compile(r"\bharsh\s+afternoon\s+sunlight\b", re.I),
+    re.compile(r"\b(?:2d\s+illustration|2d\s+animation|cel-shading|painted\s+illustration|digital\s+painting)\b", re.I),
+    re.compile(r"\b(?:cinematic\s+hdr|hyper-realistic|glossy|orange\s+and\s+teal|8k|muted\s+film\s+tones|atmospheric\s+depth)\b", re.I),
+)
+
+_NIGHT_SCENE_RE = re.compile(r"\b(night|twilight|torch|torches|lantern|nocturnal|starry)\b", re.I)
+
+
+def adapt_prompt_for_archival_photo(
+    prompt: str,
+    *,
+    era_cue: str = "1954 Indochina",
+) -> str:
+    """Ép prompt gửi lên Flow về chất ảnh phim báo chí tư liệu mộc đúng thập niên (Quy tắc 3 Tầng V5.4)."""
+    if not (prompt or "").strip():
+        return prompt
+
+    cleaned = str(prompt)
+    for pat in _ARCHIVAL_STRIP_PATTERNS:
+        cleaned = pat.sub("", cleaned)
+
+    cleaned = re.sub(r"\s*,\s*(?:,\s*)+", ", ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = cleaned.strip(" ,\t\r\n")
+
+    if _NIGHT_SCENE_RE.search(cleaned):
+        archival_cue = (
+            f"authentic {era_cue} archival documentary night photograph, cleanly restored 1954 archival "
+            "documentary photography, high-ISO 35mm monochrome war-correspondent press film, "
+            "crisp sharp historical detail of terrain, uniforms, smoke, fire and natural dim torchlight contrast, "
+            "subtle authentic silver halide film grain, candid documentary framing, "
+            "borderless edge-to-edge full-bleed frame, no photo border, no deckled edge, no fake scan frame, "
+            "no pillarbox, no letterbox, no 2D illustration, no digital painting, no glossy HDR, no plastic AI sheen"
+        )
+    else:
+        archival_cue = (
+            f"authentic {era_cue} archival documentary photograph, cleanly restored 1954 archival "
+            "documentary photography, 35mm monochrome war-correspondent press film, "
+            "crisp sharp historical detail of terrain, uniforms, smoke and natural realistic overcast daylight, "
+            "subtle authentic silver halide film grain, candid documentary framing, "
+            "borderless edge-to-edge full-bleed frame, no photo border, no deckled edge, no fake scan frame, "
+            "no pillarbox, no letterbox, no 2D illustration, no digital painting, no glossy HDR, no plastic AI sheen"
+        )
+
+    m_notext = re.search(r",?\s*\bno\s+text\b", cleaned, flags=re.I)
+    if m_notext:
+        head = cleaned[: m_notext.start()].rstrip(" ,")
+        tail = cleaned[m_notext.start() :].lstrip(" ,")
+        return f"{head}, {archival_cue}, {tail}" if head else f"{archival_cue}, {tail}"
+    return f"{cleaned}, {archival_cue}" if cleaned else archival_cue
 
 
 def resolve_io_paths(
@@ -1858,28 +1924,40 @@ def _download_tile_by_uid(
     has_popup = dl_item.get_attribute("aria-haspopup")
     dst_download_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if is_video or has_popup == "menu":
-        dl_item.hover()
-        time.sleep(0.6)
+    def _find_dl_subitem() -> Any:
         sub_loc = page.locator("[role='menuitem'], [role='option']")
-        chosen = None
         for i in range(sub_loc.count()):
             cand = sub_loc.nth(i)
             try:
                 if not cand.is_visible():
                     continue
                 txt_n = _norm_nfc(cand.inner_text())
-                if "gif" in txt_n:
+                if "gif" in txt_n or "ảnh bìa" in txt_n:
                     continue
                 if any(k in txt_n for k in ("kích thước gốc", "original", "4k", "2k", "1080p", "720p", "1k")):
-                    chosen = cand
-                    break
+                    return cand
             except Exception:
                 continue
+        return None
+
+    if is_video or has_popup == "menu":
+        try:
+            dl_item.scroll_into_view_if_needed()
+        except Exception:
+            pass
+        dl_item.hover()
+        time.sleep(0.55)
+        chosen = _find_dl_subitem()
+        if chosen is None:
+            # UI mới của Angular Material đòi click vào mục 'Tải xuống' mới mở submenu 1K/2K/4K
+            dl_item.click()
+            time.sleep(0.65)
+            chosen = _find_dl_subitem()
         if chosen is not None:
             with page.expect_download(timeout=90_000) as dl_info:
                 chosen.click()
             dl_info.value.save_as(str(dst_download_path))
+            page.keyboard.press("Escape")
             page.keyboard.press("Escape")
             page.mouse.move(10, 10)
             time.sleep(0.25)
@@ -1888,6 +1966,7 @@ def _download_tile_by_uid(
     with page.expect_download(timeout=90_000) as dl_info:
         dl_item.click()
     dl_info.value.save_as(str(dst_download_path))
+    page.keyboard.press("Escape")
     page.keyboard.press("Escape")
     page.mouse.move(10, 10)
     time.sleep(0.25)
@@ -2228,6 +2307,7 @@ def run_images_mode(
     assets_dir: Optional[Path] = None,
     raw_dir: Optional[Path] = None,
     state_path: Optional[Path] = None,
+    archival_photo: bool = False,
 ) -> int:
     """Chế độ --mode images: gen toàn bộ ảnh gốc (0 tín dụng) theo từng đợt song song + xuất JPG đúng frame_preset."""
     ep_dir = storyboard_path.parent
@@ -2326,6 +2406,8 @@ def run_images_mode(
                     sc = item.scene_data
                     raw_prompt = str(sc.get("image_prompt", "")).strip()
                     adapted_prompt = adapt_prompt_for_frame_preset(raw_prompt, eff_fp)
+                    if archival_photo:
+                        adapted_prompt = adapt_prompt_for_archival_photo(adapted_prompt)
                     prompt = _augment_prompt_for_flow_aspect(adapted_prompt, aspect_plan, selected_ui_aspect)
 
                     cur_txt = _get_visible_body_text(page)
@@ -2854,6 +2936,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Thư mục ảnh gốc tùy chỉnh (mặc định raw_images/ hoặc raw_images_16x9/).",
     )
+    parser.add_argument(
+        "--archival-photo",
+        action="store_true",
+        help="Ép prompt gửi lên Flow sang chất ảnh phim báo chí tư liệu mộc 1954 (gỡ style 2D/painting/HDR).",
+    )
     return parser
 
 
@@ -2968,6 +3055,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 assets_dir=eff_assets,
                 raw_dir=eff_raw,
                 state_path=eff_state,
+                archival_photo=bool(args.archival_photo),
             )
         return run_videos_mode(
             storyboard_path,

@@ -757,3 +757,49 @@ def test_validate_storyboard_accepts_optional_chapter_title_and_is_cta(tmp_path)
     t1_errors = bad_reports[0].errors
     assert any("chapter_title" in err for err in t1_errors)
     assert any("is_cta" in err for err in t1_errors)
+
+
+def test_adapt_prompt_for_archival_photo_v54(tmp_path):
+    import run_episode
+
+    day_2d = (
+        "Dramatic high-angle view of Muong Thanh valley in 1953, "
+        "epic 2D historical animation style, clean delicate lineart, rich cinematic cel-shading, "
+        "warm dramatic lighting, moody blue and warm sunset contrast, vertical 9:16, no text"
+    )
+    out_day = flow_bot.adapt_prompt_for_archival_photo(
+        flow_bot.adapt_prompt_for_frame_preset(day_2d, "landscape_16_9")
+    )
+    low_day = out_day.lower()
+    assert "2d historical animation" not in low_day
+    assert "cel-shading" not in low_day
+    assert "lineart" not in low_day
+    assert "painterly brushstrokes" not in low_day
+    assert "no 2d illustration" in low_day
+    assert "16:9 widescreen" in low_day
+    assert "authentic 1954 indochina archival documentary photograph" in low_day
+    assert "35mm monochrome war-correspondent press film" in low_day
+    assert low_day.endswith("no text")
+
+    night_2d = (
+        "Porters pushing cargo bicycles uphill with glowing bamboo torches at night, "
+        "cinematic historical documentary 2D semi-realistic painted illustration, "
+        "fine painterly brushstrokes, dramatic rim lighting, no text, no watermark"
+    )
+    out_night = flow_bot.adapt_prompt_for_archival_photo(night_2d)
+    low_night = out_night.lower()
+    assert "painted illustration" not in low_night
+    assert "painterly brushstrokes" not in low_night
+    assert "dramatic rim lighting" not in low_night
+    assert "archival documentary night photograph" in low_night
+    assert "high-iso 35mm monochrome" in low_night
+
+    fb_args = flow_bot.build_arg_parser().parse_args(
+        [str(tmp_path / "storyboard.json"), "--mode", "images", "--youtube-16x9", "--archival-photo"]
+    )
+    assert fb_args.archival_photo is True
+
+    re_args = run_episode.build_arg_parser().parse_args(
+        [str(tmp_path), "--phase", "images", "--youtube-16x9", "--archival-photo"]
+    )
+    assert re_args.archival_photo is True

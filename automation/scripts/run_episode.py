@@ -404,6 +404,7 @@ def run_phase_images(
     youtube_16x9: bool = False,
     assets_dir: Optional[Path] = None,
     raw_dir: Optional[Path] = None,
+    archival_photo: bool = False,
 ) -> int:
     # Khi chạy --youtube-16x9: chỉ validate read-only để không chạm assets/ hay pipeline_state.json của TikTok
     use_sync = (not dry_run) and (not youtube_16x9) and (assets_dir is None) and (raw_dir is None)
@@ -417,6 +418,8 @@ def run_phase_images(
         cmd.extend(["--scenes", scenes_arg])
     if dry_run:
         cmd.append("--dry-run")
+    if archival_photo:
+        cmd.append("--archival-photo")
     if cdp_url:
         cmd.extend(["--cdp-url", cdp_url])
     if concurrency is not None:
@@ -642,6 +645,7 @@ def run_phase_all(
     youtube_16x9: bool = False,
     assets_dir: Optional[Path] = None,
     raw_dir: Optional[Path] = None,
+    archival_photo: bool = False,
 ) -> int:
     rc_img = run_phase_images(
         ep_dir,
@@ -654,6 +658,7 @@ def run_phase_all(
         youtube_16x9=youtube_16x9,
         assets_dir=assets_dir,
         raw_dir=raw_dir,
+        archival_photo=archival_photo,
     )
     if rc_img == 2:
         return 2
@@ -790,6 +795,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Thư mục ảnh gốc tùy chỉnh (vd: raw_images_16x9).",
     )
+    parser.add_argument(
+        "--archival-photo",
+        action="store_true",
+        help="Ép prompt gửi sang Google Flow về chất ảnh phim báo chí tư liệu mộc 1954 (gỡ style 2D/painting/HDR).",
+    )
     return parser
 
 
@@ -830,6 +840,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             youtube_16x9=bool(args.youtube_16x9),
             assets_dir=args.assets_dir,
             raw_dir=args.raw_dir,
+            archival_photo=bool(args.archival_photo),
         )
 
     if args.phase == "videos":
@@ -861,6 +872,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         youtube_16x9=bool(args.youtube_16x9),
         assets_dir=args.assets_dir,
         raw_dir=args.raw_dir,
+        archival_photo=bool(args.archival_photo),
     )
 
 

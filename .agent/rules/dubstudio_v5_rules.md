@@ -63,7 +63,11 @@ Mọi tác vụ chia tập, viết kịch bản, thiết kế hình ảnh, motio
     - `portrait_9_16`: `vertical 9:16, edge-to-edge full-bleed, no white borders`
     - `landscape_16_9`: `16:9 widescreen framing, balanced horizontal composition, edge-to-edge full-bleed, no white borders`
 - **Phân nhánh phong cách theo thời kỳ lịch sử:**
-  - **Sử cận/hiện đại (1945–1979):** Ưu tiên tuyệt đối Hạng `0_100` săn tư liệu thật qua `automation/scripts/fetch_archive_media.py` (mặc định `--exclude-modern` lọc bỏ ảnh du lịch/tượng đài/sạp vải ngày nay nhưng vẫn giữ ảnh gốc lưu trữ). Cảnh AI chỉ gen bù theo chất ảnh tư liệu mộc (`matte archival film grain, natural flat daylight`).
+  - **Sử cận/hiện đại (1945–1979) — QUY TẮC 3 TẦNG CHỐNG "QUÁ AI / TRANH VẼ" (BẮT BUỘC):**
+    - **Tầng 1 (Tư liệu thật đúng sự kiện):** Ưu tiên tối đa ảnh/clip lưu trữ thật qua `automation/scripts/fetch_archive_media.py` (mặc định `--exclude-modern` lọc bỏ ảnh du lịch/tượng đài/hiện đại).
+    - **Tầng 2 (Tư liệu thật cùng bối cảnh / thập niên):** Nếu không có ảnh đúng khoảnh khắc đó, ưu tiên ảnh tư liệu thật cùng chiến dịch / mặt trận / giai đoạn lịch sử trước khi phải gọi AI.
+    - **Tầng 3 (AI gen bù chuẩn ảnh phim tư liệu mộc — chạy kèm cờ `--archival-photo`):** Mọi cảnh buộc phải dùng AI gen bù PHẢI đồng bộ chất ảnh phim báo chí tư liệu mộc đúng thập niên (`authentic 1954 Indochina archival documentary photograph, 35mm monochrome or heavily muted vintage war-correspondent film, natural overcast/flat lighting, authentic film grain, candid wide/medium/over-the-shoulder shot`).
+    - **CẤM TUYỆT ĐỐI** phong cách minh họa 2D (`2D illustration`, `2D animation`, `cel-shading`, `clean lineart`, `digital painting`, `painterly brushstrokes`), màu rực HDR (`cinematic HDR`, `orange and teal`), bóng nhựa `glossy`, và hạn chế tối đa cận mặt người AI (ưu tiên góc rộng, góc sau vai `over-the-shoulder`, hoặc góc nghiêng tự nhiên).
   - **Sử cổ/trung đại (không có ảnh chụp):** TUYỆT ĐỐI KHÔNG ép AI giả ảnh chụp người thật; chuyển sang hệ mỹ thuật **tranh tư liệu bảo tàng / tranh sơn dầu cổ điển / tranh mực tàu giấy dó** xen kẽ bản đồ cổ và ảnh thật di tích/hiện vật (săn Wikimedia bằng cờ `--include-sites`).
 - **Hệ thống 4 Hạng tỉ lệ ưu tiên (BẮT BUỘC đánh giá độ phong phú tư liệu lịch sử trước khi chia cảnh):**
   - **Hạng 1 — `0_100` (Mặc định ưu tiên cao nhất: 0%–15% `flow_video` / 85%–100% `static_image`):** Áp dụng cho các sự kiện cận đại – hiện đại có kho ảnh tư liệu phong phú (như Điện Biên Phủ 1954, Kháng chiến chống Mỹ...).
