@@ -219,3 +219,33 @@ def test_cli_dry_run_with_concurrency():
     assert res_ep.returncode == 0, res_ep.stderr
     assert "TỔNG TÍN DỤNG DỰ KIẾN TIÊU THỤ: 0 tín dụng" in res_ep.stdout
     assert "3 videos/đợt" in res_ep.stdout
+
+
+def test_archival_photo_default_and_scene_override():
+    """Kiểm tra mặc định bật V5.4 toàn cục và ghi đè `archival_photo: False` cho từng cảnh trong 1 lượt chạy."""
+    diagram_sc = {
+        "id": 1,
+        "archival_photo": False,
+        "image_prompt": "Clean geological hillside cross-section diagram showing tunnel beneath fortress, vertical 9:16, no text",
+    }
+    battlefield_sc = {
+        "id": 2,
+        "image_prompt": "Viet Minh soldiers advancing through mud trenches at dawn, vertical 9:16, no text",
+    }
+
+    assert flow_bot.should_apply_archival_photo(diagram_sc, global_archival_photo=True) is False
+    assert flow_bot.should_apply_archival_photo(battlefield_sc, global_archival_photo=True) is True
+    assert flow_bot.should_apply_archival_photo(diagram_sc, global_archival_photo=False) is False
+    assert flow_bot.should_apply_archival_photo(battlefield_sc, global_archival_photo=False) is False
+
+    # Cùng 1 lượt chạy mặc định archival_photo=True: cảnh sơ đồ giữ nguyên, cảnh chiến trường áp chuẩn V5.4
+    p_diag = flow_bot.prepare_image_prompt_for_scene(diagram_sc, "landscape_16_9").lower()
+    p_bat = flow_bot.prepare_image_prompt_for_scene(battlefield_sc, "landscape_16_9").lower()
+    assert "16:9 widescreen" in p_diag
+    assert "war-correspondent photography" not in p_diag
+    assert "cleanly restored archival documentary war-correspondent photography" in p_bat
+    assert "deep gritty texture" in p_bat
+
+    # Tắt toàn cục (--no-archival-photo): không cảnh nào bị ép V5.4
+    p_bat_off = flow_bot.prepare_image_prompt_for_scene(battlefield_sc, "landscape_16_9", archival_photo=False).lower()
+    assert "war-correspondent photography" not in p_bat_off

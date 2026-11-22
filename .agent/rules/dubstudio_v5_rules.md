@@ -1,6 +1,21 @@
-# QUY TẮC BẮT BUỘC: PIPELINE LỊCH SỬ DUAL-DELIVERY V5.4 (TIKTOK 9:16 + YOUTUBE 16:9 SONG SONG + DUBSTUDIO v3.2 + CHỐNG BÓNG NHỰA AI + GOOGLE FLOW)
+# QUY TẮC BẮT BUỘC: PIPELINE LỊCH SỬ DUAL-DELIVERY V5.4 + V5.5 (TIKTOK 9:16 + YOUTUBE 16:9 SONG SONG + DUBSTUDIO v3.2 + CHỐNG BÓNG NHỰA AI + GOOGLE FLOW)
 
 Mọi tác vụ chia tập, viết kịch bản, thiết kế hình ảnh, motion và xuất JSON cho series lịch sử PHẢI tuân thủ tuyệt đối các luật dưới đây:
+
+## 0. MẶC ĐỊNH BẮT BUỘC CHO MỌI DỰ ÁN LỊCH SỬ MỚI (V5.4 + V5.5)
+Bốn quy tắc dưới đây được khóa **mặc định vĩnh viễn** và tự động áp dụng cho mọi dự án lịch sử mới mà không cần nhắc lại cấu hình:
+1. **Chất ảnh mặc định (`archival_photo=True`):**
+   - Áp chuẩn **ảnh phóng sự chiến trường V5.4 phục dựng sắc nét, gai góc, có chiều sâu, giữ nguyên bản thực tế** (`cleanly restored archival documentary war-correspondent photography, raw 35mm monochrome / near-monochrome film grain, stark authentic natural lighting, deep gritty texture`); **CẤM** màu rực AI, `Kodachrome`, `colorized`, `warm sunlight rays`, `golden hour`, `teal-and-orange`, `cinematic bokeh`.
+   - `flow_bot.py` và `run_episode.py` mặc định BẬT lọc V5.4 cho mọi cảnh (`--no-archival-photo` chỉ dùng khi cần tắt toàn cục).
+   - **Ghi đè theo từng cảnh:** Trong `storyboard.json`, nếu có cảnh sơ đồ mặt cắt kỹ thuật hoặc cảnh thời hiện đại cần giữ phong cách riêng, gắn `"archival_photo": false` ngay trên object cảnh đó — `flow_bot.py` sẽ bỏ qua lọc V5.4 cho riêng cảnh ấy và vẫn giữ V5.4 cho các cảnh còn lại trong cùng 1 lượt chạy.
+2. **Lời thoại chuẩn TTS tiếng Việt ngay từ đầu:**
+   - Tuyệt đối không dùng ký hiệu viết tắt, đơn vị ký hiệu hay số thập phân dễ đọc vấp trong `speech` và `beats[].text` (`cm` → `xăng-ti-mét`, `°` → `độ`, `0,8` → `0 phẩy 8`, `2,5` → `2 mét rưỡi`).
+3. **Tự động săn tư liệu đa nguồn V5.5 trước khi chạy Google Flow:**
+   - Luôn quét trước nguồn báo chí/bảo tàng Việt Nam `vn_press` (`qdnd.vn`, `baotanglichsu.vn`, `btlsqsvn.org.vn`, `vnanet.vn`) kết hợp kho quốc tế (`wikimedia`, `internet_archive`), tự duyệt `<project_dir>/staging_press/contact_sheet.jpg` và `--promote` các ảnh thật sạch đẹp vào `assets/` hoặc `assets_16x9/` trước khi sinh bù AI trên Flow.
+4. **An toàn & Kiểm duyệt tự động:**
+   - Luôn khóa SHA-256 bảo vệ toàn bộ ảnh tư liệu thật + audio gốc (`full_audio.mp3` / `.wav`) trước khi chạy bot.
+   - Kiểm tra đúng hướng khung hình (`portrait_9_16` vs `landscape_16_9` / `framed_4_5` / `framed_1_1`) ngay từ ảnh đầu tiên.
+   - Tự duyệt contact sheet thành phẩm, tự động cắt sạch mọi viền scan/pillarbox/letterbox phát sinh và bắt buộc chạy `validate_storyboard.py` đạt **`0 ERROR`** trước khi sản xuất.
 
 ## 1. Quy chuẩn đường dẫn & Không phá lõi DubStudio
 - TUYỆT ĐỐI không sửa mã nguồn trong `core/`, `gui/`, `story_mode/story/`, `tests/` khi đang chạy quy trình sản xuất nội dung.
@@ -24,11 +39,15 @@ Mọi tác vụ chia tập, viết kịch bản, thiết kế hình ảnh, motio
   - **TUYỆT ĐỐI KHÔNG** bịa đặt ngày tháng, quân số, tên đơn vị, thương vong, địa danh hay câu nói của nhân vật lịch sử.
   - Mọi sự kiện/con số đưa vào lời thoại (`elevenlabs.txt`) phải bám sát tài liệu `.txt` đầu vào hoặc chính sử đã được công nhận rộng rãi. Chi tiết nào không chắc chắn 100% **BẮT BUỘC loại bỏ**, không phóng đại hay suy diễn.
   - Mỗi tập bắt buộc xuất file `fact_check.md` liệt kê bảng đối chiếu từng mốc thời gian, con số, nhân vật, đơn vị và địa danh kèm nguồn kiểm chứng.
-- **Khóa tư liệu thật & bản quyền (Media Authenticity Policy):**
-  - Ưu tiên tuyệt đối ảnh & video thuộc phạm vi công cộng / giấy phép mở từ **Wikimedia Commons** và **Internet Archive (`archive.org`)** qua `automation/scripts/fetch_archive_media.py`.
-  - **CẤM TUYỆT ĐỐI** lấy clip/ảnh dính logo đài truyền hình hoặc watermark bản quyền (`VTV`, `INA`, `AP`, `Reuters`, `Getty`, `Shutterstock`, `British Pathé` có đóng dấu).
+- **Khóa tư liệu thật & bản quyền V5.5 (Media Authenticity Policy — Đa nguồn):**
+  - Ưu tiên tuyệt đối ảnh & video thuộc phạm vi công cộng / giấy phép mở qua `automation/scripts/fetch_archive_media.py` với cờ `--sources wikimedia,internet_archive,nara` và `--media-type image|video|all`:
+    - **Wikimedia Commons (`wikimedia`):** Ảnh & video tư liệu Public Domain / CC0 / CC BY-SA.
+    - **Internet Archive (`internet_archive` — `archive.org`):** Cả ảnh lịch sử lẫn video thời sự gốc Public Domain (`.mp4`, vd: *Universal Newsreels* / phim thời sự Đông Dương 1950s).
+    - **NARA (`nara` — `catalog.archives.gov`):** Ảnh quân sự độ phân giải cao từ Lưu trữ Quốc gia Hoa Kỳ (`Public Domain — U.S. National Archives`).
+    - **Báo chí & Bảo tàng Việt Nam (`vn_press` — `qdnd.vn`, `baotanglichsu.vn`, `btlsqsvn.org.vn`, `vnanet.vn`, `nhandan.vn`, `vietnamplus.vn`):** Dùng `--urls <url1> <url2>` hoặc `--sources vn_press --query "..."` để bóc ảnh tư liệu lịch sử 1945–1979 (`>= 600px`) kèm chú thích vào `<project_dir>/staging_press/` + `contact_sheet.jpg` + `manifest.json`. Duyệt trực quan rồi nạp cảnh chọn bằng `--promote <id>:<scene_num>` (ghi đúng nhãn `"Editorial / Press Archive (Credit Required)"`, không ghi sai thành Public Domain).
+  - **CẤM TUYỆT ĐỐI** lấy clip/ảnh dính logo đài truyền hình, watermark đè giữa ảnh hoặc cắt từ phim điện ảnh/phóng sự VTV dễ dính Content ID (`VTV`, `INA`, `AP`, `Reuters`, `Getty`, `Shutterstock`, `British Pathé` có đóng dấu).
   - **CẤM** dùng nhầm tư liệu sai thời kỳ (ví dụ: tuyệt đối không dùng hình ảnh giai đoạn 1965–1975 cho Điện Biên Phủ 1954).
-  - **Khi cảnh khan hiếm tư liệu thật:** ưu tiên dùng **Bản đồ chiến thuật / sơ đồ địa hình / cảnh núi rừng, bối cảnh biểu tượng**. **TUYỆT ĐỐI KHÔNG** dùng AI tạo giả ảnh chụp nhân vật lịch sử thật làm những việc không có thật trong lịch sử (tránh vi phạm chính sách nội dung tổng hợp gây hiểu lầm của TikTok).
+  - **Khi cảnh khan hiếm tư liệu thật:** ưu tiên dùng **Bản đồ chiến thuật / sơ đồ mặt cắt kỹ thuật / cảnh núi rừng, bối cảnh biểu tượng**. **TUYỆT ĐỐI KHÔNG** dùng AI tạo giả ảnh chụp nhân vật lịch sử thật làm những việc không có thật trong lịch sử (tránh vi phạm chính sách nội dung tổng hợp gây hiểu lầm của TikTok).
 
 ## 2. Quy chuẩn Kịch bản, Hook 3s & Giữ chân Viral V5.2 (`core/story_pipeline.py` v3.2)
 - **Luật Hook 3 giây đầu (Cảnh 1 — BẮT BUỘC):**
@@ -66,7 +85,7 @@ Mọi tác vụ chia tập, viết kịch bản, thiết kế hình ảnh, motio
   - **Sử cận/hiện đại (1945–1979) — QUY TẮC 3 TẦNG CHỐNG "QUÁ AI / TRANH VẼ" (BẮT BUỘC):**
     - **Tầng 1 (Tư liệu thật đúng sự kiện):** Ưu tiên tối đa ảnh/clip lưu trữ thật qua `automation/scripts/fetch_archive_media.py` (mặc định `--exclude-modern` lọc bỏ ảnh du lịch/tượng đài/hiện đại).
     - **Tầng 2 (Tư liệu thật cùng bối cảnh / thập niên):** Nếu không có ảnh đúng khoảnh khắc đó, ưu tiên ảnh tư liệu thật cùng chiến dịch / mặt trận / giai đoạn lịch sử trước khi phải gọi AI.
-    - **Tầng 3 (AI gen bù chuẩn ảnh phim tư liệu mộc — chạy kèm cờ `--archival-photo`):** Mọi cảnh buộc phải dùng AI gen bù PHẢI đồng bộ chất ảnh phim báo chí tư liệu mộc đúng thập niên (`authentic 1954 Indochina archival documentary photograph, 35mm monochrome or heavily muted vintage war-correspondent film, natural overcast/flat lighting, authentic film grain, candid wide/medium/over-the-shoulder shot`).
+    - **Tầng 3 (AI gen bù chuẩn phóng sự chiến trường V5.4 — BẬT MẶC ĐỊNH trong `flow_bot.py` & `run_episode.py`):** Mọi cảnh AI gen bù PHẢI đồng bộ chất **ảnh phóng sự chiến trường phục dựng sắc nét, gai góc, có chiều sâu** (`cleanly restored archival documentary war-correspondent photography, raw 35mm monochrome / near-monochrome film grain, stark authentic natural lighting, deep gritty texture`), loại bỏ sạch mọi cụm màu AI rực (`Kodachrome`, `colorized`, `warm sunlight rays`, `golden hour`, `teal-and-orange`, `cinematic bokeh`), giữ chốt chặn `no modern cinematic color grading, no golden hour glow, no teal-and-orange, no glossy AI sheen, no fake scan frame, no pillarbox, no letterbox`. Chỉ gắn `"archival_photo": false` ở cấp cảnh trong `storyboard.json` nếu đó là cảnh sơ đồ mặt cắt kỹ thuật hoặc cảnh thời hiện đại.
     - **CẤM TUYỆT ĐỐI** phong cách minh họa 2D (`2D illustration`, `2D animation`, `cel-shading`, `clean lineart`, `digital painting`, `painterly brushstrokes`), màu rực HDR (`cinematic HDR`, `orange and teal`), bóng nhựa `glossy`, và hạn chế tối đa cận mặt người AI (ưu tiên góc rộng, góc sau vai `over-the-shoulder`, hoặc góc nghiêng tự nhiên).
   - **Sử cổ/trung đại (không có ảnh chụp):** TUYỆT ĐỐI KHÔNG ép AI giả ảnh chụp người thật; chuyển sang hệ mỹ thuật **tranh tư liệu bảo tàng / tranh sơn dầu cổ điển / tranh mực tàu giấy dó** xen kẽ bản đồ cổ và ảnh thật di tích/hiện vật (săn Wikimedia bằng cờ `--include-sites`).
 - **Hệ thống 4 Hạng tỉ lệ ưu tiên (BẮT BUỘC đánh giá độ phong phú tư liệu lịch sử trước khi chia cảnh):**

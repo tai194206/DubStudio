@@ -28,6 +28,9 @@ from gui.series_youtube_tab import (
     ANTI_AI_YT_LEVELS,
     LAYOUT_MODES,
     SUBTITLE_MODES,
+    VIDEO_CODECS,
+    WATERMARK_POSITIONS,
+    XFADE_TRANSITIONS,
     SeriesYouTubeTab,
     parse_skip_scenes_text,
 )
@@ -122,8 +125,22 @@ def test_series_youtube_tab_standalone_and_mounted_in_app(gui_app):
         _, cfg = tab.build_compile_inputs()
         assert cfg.layout_mode == "smart"
         assert cfg.subtitle_mode == "srt_only"
+        assert set(SUBTITLE_MODES.keys()) == {"none", "srt_only", "burn_and_srt"}
+        assert set(WATERMARK_POSITIONS.keys()) == {"top_left", "top_right", "bottom_left", "bottom_right"}
+        assert set(XFADE_TRANSITIONS.keys()) == {"fade", "fadeblack", "none"}
+        assert set(VIDEO_CODECS.keys()) == {"h264", "h265"}
         assert cfg.speed_factor == 1.08
         assert cfg.anti_ai_level == "medium"
+        assert cfg.watermark_enabled is True
+        assert cfg.watermark_position == "top_left"
+        assert cfg.watermark_opacity == 0.40
+        assert cfg.xfade_transition == "fade"
+        assert cfg.xfade_duration == 0.30
+        assert cfg.smart_clip_fit is True
+        assert cfg.video_codec == "h264"
+        assert cfg.show_lower_third is True
+        assert cfg.show_chapter_badge is True
+        assert cfg.enable_film_grain_vignette is True
         assert cfg.auto_skip_mid_cta is True
         assert cfg.include_chapter_cards is True
         assert cfg.include_end_credits is True
@@ -195,11 +212,13 @@ def test_series_gui_mapping_and_mocked_compile(gui_app, tmp_path, monkeypatch):
         out_dir = Path(cfg.output_dir or (Path(s_dir) / "youtube_export"))
         out_dir.mkdir(parents=True, exist_ok=True)
         vid = out_dir / "Series_Test_Full_16x9.mp4"
-        srt = out_dir / "Series_Test_subtitles.srt"
+        srt = None if cfg.subtitle_mode == "none" else (out_dir / "Series_Test_subtitles.srt")
         desc = out_dir / "youtube_description.txt"
         rep_json = out_dir / "compliance_report.json"
-        for f in (vid, srt, desc, rep_json):
+        for f in (vid, desc, rep_json):
             f.write_text("ok", encoding="utf-8")
+        if srt is not None:
+            srt.write_text("ok", encoding="utf-8")
 
         return SeriesCompileResult(
             video_path=vid,
@@ -264,9 +283,19 @@ def test_series_gui_mapping_and_mocked_compile(gui_app, tmp_path, monkeypatch):
 
     tab.prefer_assets_16x9.set(False)
     tab.layout_mode_choice.set(LAYOUT_MODES["pillarbox"])
-    tab.subtitle_mode_choice.set(SUBTITLE_MODES["burn_and_srt"])
+    tab.subtitle_mode_choice.set(SUBTITLE_MODES["none"])
     tab.speed_factor.set(1.15)
     tab.anti_ai_choice.set(ANTI_AI_YT_LEVELS["light"])
+    tab.xfade_transition_choice.set(XFADE_TRANSITIONS["fadeblack"])
+    tab.xfade_duration.set(0.45)
+    tab.smart_clip_fit.set(False)
+    tab.video_codec_choice.set(VIDEO_CODECS["h265"])
+    tab.watermark_enabled.set(True)
+    tab.watermark_position_choice.set(WATERMARK_POSITIONS["bottom_right"])
+    tab.watermark_opacity.set(0.55)
+    tab.show_lower_third.set(False)
+    tab.show_chapter_badge.set(False)
+    tab.enable_film_grain_vignette.set(False)
     tab.include_chapter_cards.set(False)
     tab.loudnorm_youtube.set(False)
     tab.bgm_path.set(str(bgm_file))
@@ -282,6 +311,7 @@ def test_series_gui_mapping_and_mocked_compile(gui_app, tmp_path, monkeypatch):
         time.sleep(0.02)
 
     assert tab.last_result is not None
+    assert tab.last_result.srt_path is None
     assert captured["thread_name"] != threading.main_thread().name
     assert captured["series_dir"] == series_dir.resolve()
 
@@ -289,9 +319,19 @@ def test_series_gui_mapping_and_mocked_compile(gui_app, tmp_path, monkeypatch):
     sent_eps = captured["episodes"]
     assert sent_cfg.prefer_assets_16x9 is False
     assert sent_cfg.layout_mode == "pillarbox"
-    assert sent_cfg.subtitle_mode == "burn_and_srt"
+    assert sent_cfg.subtitle_mode == "none"
     assert sent_cfg.speed_factor == 1.15
     assert sent_cfg.anti_ai_level == "light"
+    assert sent_cfg.xfade_transition == "fadeblack"
+    assert sent_cfg.xfade_duration == 0.45
+    assert sent_cfg.smart_clip_fit is False
+    assert sent_cfg.video_codec == "h265"
+    assert sent_cfg.watermark_enabled is True
+    assert sent_cfg.watermark_position == "bottom_right"
+    assert sent_cfg.watermark_opacity == 0.55
+    assert sent_cfg.show_lower_third is False
+    assert sent_cfg.show_chapter_badge is False
+    assert sent_cfg.enable_film_grain_vignette is False
     assert sent_cfg.include_chapter_cards is False
     assert sent_cfg.include_end_credits is True
     assert sent_cfg.loudnorm_youtube is False
@@ -302,6 +342,15 @@ def test_series_gui_mapping_and_mocked_compile(gui_app, tmp_path, monkeypatch):
     assert sent_cfg.watermark_text == "Sử Việt 16:9"
     assert sent_cfg.output_dir == custom_out
     assert sent_cfg.episode_skip_overrides["Tap_01"] == [2, 3]
+
+    # Khi tắt checkbox watermark_enabled thì watermark_text trả về None dù channel_name vẫn giữ cho End Credits
+    tab.watermark_enabled.set(False)
+    tab.subtitle_mode_choice.set(SUBTITLE_MODES["burn_and_srt"])
+    _, cfg_wm_off = tab.build_compile_inputs()
+    assert cfg_wm_off.watermark_enabled is False
+    assert cfg_wm_off.watermark_text is None
+    assert cfg_wm_off.channel_name == "Sử Việt 16:9"
+    assert cfg_wm_off.subtitle_mode == "burn_and_srt"
 
     assert sent_eps[0].chapter_title == "Mở màn lịch sử"
     assert sent_eps[0].skip_scene_ids == [2, 3]

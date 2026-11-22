@@ -43,6 +43,84 @@ DEFAULT_CANDIDATES_ROOT = REPO_ROOT / "automation" / "debug" / "archive_candidat
 WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php"
 IA_SEARCH_URL = "https://archive.org/advancedsearch.php"
 IA_METADATA_URL = "https://archive.org/metadata/{identifier}"
+NARA_API_URL = "https://catalog.archives.gov/api/v1/"
+DDG_HTML_SEARCH_URL = "https://html.duckduckgo.com/html/"
+
+DEFAULT_SOURCES = "wikimedia,internet_archive,nara"
+EDITORIAL_PRESS_LICENSE = "Editorial / Press Archive (Credit Required)"
+VN_PRESS_MIN_EDGE = 600
+
+VN_PRESS_DOMAINS: Dict[str, str] = {
+    "qdnd.vn": "Báo Quân đội nhân dân (qdnd.vn)",
+    "baotanglichsu.vn": "Bảo tàng Lịch sử Quốc gia (baotanglichsu.vn)",
+    "btlsqsvn.org.vn": "Bảo tàng Lịch sử Quân sự Việt Nam (btlsqsvn.org.vn)",
+    "vnanet.vn": "Thông tấn xã Việt Nam (vnanet.vn)",
+    "nhandan.vn": "Báo Nhân Dân (nhandan.vn)",
+    "vietnamplus.vn": "VietnamPlus - TTXVN (vietnamplus.vn)",
+    "baochinhphu.vn": "Báo Điện tử Chính phủ (baochinhphu.vn)",
+    "cand.com.vn": "Báo Công an nhân dân (cand.com.vn)",
+}
+
+_NON_CONTENT_IMG_RE = re.compile(
+    r"(?:(?:^|[/_.\-])(?:logo|avatar|icon|favicon|banner|ads?|advert|share|button|sprite|badge|arrow|bullet|spinner|loading|placeholder|blank|pixel|spacer)(?:[/_.\-]|$)|"
+    r"\.(?:svg|gif)(?:\?|$)|^data:image/)",
+    re.IGNORECASE,
+)
+
+
+def parse_sources_arg(raw_sources: Any) -> List[str]:
+    """Chuẩn hóa danh sách nguồn từ chuỗi phân tách dấu phẩy hoặc list."""
+    if raw_sources is None:
+        raw_tokens = DEFAULT_SOURCES.split(",")
+    elif isinstance(raw_sources, (list, tuple, set)):
+        raw_tokens = []
+        for item in raw_sources:
+            raw_tokens.extend(str(item).split(","))
+    else:
+        raw_tokens = str(raw_sources).split(",")
+
+    normalized: List[str] = []
+    alias_map = {
+        "wikimedia": "wikimedia",
+        "wikimedia_commons": "wikimedia",
+        "commons": "wikimedia",
+        "internet_archive": "internet_archive",
+        "archive": "internet_archive",
+        "archive.org": "internet_archive",
+        "ia": "internet_archive",
+        "nara": "nara",
+        "national_archives": "nara",
+        "vn_press": "vn_press",
+        "vnpress": "vn_press",
+        "press": "vn_press",
+    }
+    for tok in raw_tokens:
+        clean = tok.strip().lower()
+        if not clean:
+            continue
+        if clean == "all":
+            for s in ("wikimedia", "internet_archive", "nara", "vn_press"):
+                if s not in normalized:
+                    normalized.append(s)
+            continue
+        mapped = alias_map.get(clean)
+        if not mapped:
+            raise ValueError(
+                f"Nguồn '--sources' không hợp lệ: '{tok}' (hỗ trợ: wikimedia, internet_archive, nara, vn_press, all)."
+            )
+        if mapped not in normalized:
+            normalized.append(mapped)
+    return normalized or ["wikimedia", "internet_archive", "nara"]
+
+
+def resolve_vn_press_publisher(url: str) -> str:
+    """Nhận diện tên cơ quan báo chí / bảo tàng từ URL bài viết."""
+    host = urllib.parse.urlparse(str(url or "").strip()).netloc.lower()
+    host = re.sub(r"^www\.", "", host)
+    for dom, label in VN_PRESS_DOMAINS.items():
+        if host == dom or host.endswith("." + dom):
+            return label
+    return host or "Báo chí / Bảo tàng Việt Nam"
 
 USER_AGENT = "DubStudioArchiveFetcher/1.0 (https://github.com/tai194206/DubStudio; historical-archive-research)"
 REQUEST_TIMEOUT = 25
@@ -439,21 +517,302 @@ def _search_wikimedia(
     return collected
 
 
+# ------------------------------------------------------------------ Internet Archive Images & NARA Images
+def _pick_best_ia_image_file(files: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    scored: List[Tuple[int, Dict[str, Any]]] = []
+    for f in files:
+        name = str(f.get("name") or "")
+        low = name.lower()
+        ext = Path(name).suffix.lower()
+        if ext not in ALLOWED_IMAGE_EXTS:
+            continue
+        if any(skip in low for skip in ("_thumb", "__ia_thumb", "_itemimage", "logo", "icon")):
+            continue
+        sz = _safe_int(f.get("size"))
+        if sz <= 0 or sz > 35 * 1024 * 1024:
+            continue
+        score = 0
+        if ext in (".jpg", ".jpeg"):
+            score += 100
+        elif ext == ".png":
+            score += 80
+        if str(f.get("source") or "").lower() == "original":
+            score += 30
+        w = _safe_int(f.get("width"))
+        h = _safe_int(f.get("height"))
+        if max(w, h) >= 800:
+            score += 25
+        scored.append((score, f))
+    if not scored:
+        return None
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return scored[0][1]
+
+
+def _search_internet_archive_images(
+    session: requests.Session,
+    queries: Sequence[str],
+    *,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Tìm ảnh tư liệu lịch sử Public Domain trên Internet Archive (archive.org)."""
+    candidates: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    rows = max(limit * 2, 10)
+
+    for q in queries:
+        q_clean = str(q).strip()
+        if not q_clean:
+            continue
+        params = [
+            ("q", f"({q_clean}) AND mediatype:(image)"),
+            ("fl[]", "identifier"),
+            ("fl[]", "title"),
+            ("fl[]", "year"),
+            ("fl[]", "date"),
+            ("fl[]", "description"),
+            ("fl[]", "creator"),
+            ("fl[]", "licenseurl"),
+            ("fl[]", "rights"),
+            ("rows", str(min(30, rows))),
+            ("page", "1"),
+            ("output", "json"),
+        ]
+        try:
+            resp = session.get(IA_SEARCH_URL, params=params, timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            docs = ((resp.json().get("response") or {}).get("docs") or [])
+        except Exception as e:
+            print(f"⚠️ Lỗi tìm ảnh Internet Archive cho '{q_clean}': {e}", file=sys.stderr)
+            continue
+
+        for doc in docs:
+            ident = str(doc.get("identifier") or "").strip()
+            if not ident or ident in seen_ids:
+                continue
+            seen_ids.add(ident)
+
+            title = str(doc.get("title") or ident).strip()
+            year_val = str(doc.get("year") or doc.get("date") or "").strip()
+            desc = _strip_html(doc.get("description"))
+            creator = _strip_html(doc.get("creator")) or "Internet Archive"
+            lic_url = str(doc.get("licenseurl") or "").strip()
+            rights = _strip_html(doc.get("rights"))
+
+            combined = " | ".join([ident, title, desc, creator, lic_url, rights])
+            if FORBIDDEN_MEDIA_RE.search(combined):
+                continue
+
+            try:
+                meta_resp = session.get(IA_METADATA_URL.format(identifier=ident), timeout=REQUEST_TIMEOUT)
+                meta_resp.raise_for_status()
+                meta_json = meta_resp.json()
+            except Exception:
+                continue
+
+            files = meta_json.get("files") or []
+            best_file = _pick_best_ia_image_file(files)
+            if not best_file:
+                continue
+
+            fname = str(best_file.get("name") or "")
+            ext = Path(fname).suffix.lower() or ".jpg"
+            dl_url = f"https://archive.org/download/{ident}/{urllib.parse.quote(fname)}"
+            lic_label = lic_url or rights or "Public Domain / Internet Archive"
+            candidates.append(
+                {
+                    "provider": "internet_archive",
+                    "identifier": ident,
+                    "query": q_clean,
+                    "title": title[:180],
+                    "author": creator[:140],
+                    "year_or_date": year_val[:60],
+                    "description": desc[:400],
+                    "license": lic_label[:160],
+                    "mime": "image/jpeg" if ext in (".jpg", ".jpeg") else f"image/{ext.lstrip('.')}",
+                    "ext": ext,
+                    "width": _safe_int(best_file.get("width")),
+                    "height": _safe_int(best_file.get("height")),
+                    "size_bytes": _safe_int(best_file.get("size")),
+                    "url": dl_url,
+                    "page_url": f"https://archive.org/details/{ident}",
+                }
+            )
+            if len(candidates) >= limit * 2:
+                break
+    return candidates
+
+
+def _extract_nara_records(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Hỗ trợ đọc danh sách kết quả từ cấu trúc JSON NARA API v1/v2."""
+    if not isinstance(payload, dict):
+        return []
+    opa = payload.get("opaResponse")
+    if isinstance(opa, dict):
+        res_obj = opa.get("results")
+        if isinstance(res_obj, dict):
+            arr = res_obj.get("result")
+            if isinstance(arr, list):
+                return [r for r in arr if isinstance(r, dict)]
+            if isinstance(arr, dict):
+                return [arr]
+    for key in ("results", "data", "hits", "records", "items"):
+        val = payload.get(key)
+        if isinstance(val, list):
+            return [r for r in val if isinstance(r, dict)]
+        if isinstance(val, dict):
+            for sub_k in ("result", "hits", "items", "records"):
+                sub_v = val.get(sub_k)
+                if isinstance(sub_v, list):
+                    return [r for r in sub_v if isinstance(r, dict)]
+    return []
+
+
+def _extract_nara_image_url_and_meta(rec: Dict[str, Any]) -> Optional[Tuple[str, str, str, str, str]]:
+    """Trích (image_url, title, date_str, naid, desc) từ một bản ghi NARA."""
+    naid = str(rec.get("naId") or rec.get("naid") or rec.get("id") or "").strip()
+    title = str(rec.get("title") or "").strip()
+    date_str = str(rec.get("year") or rec.get("date") or "").strip()
+    desc = str(rec.get("description") or "").strip()
+
+    desc_block = rec.get("description")
+    if isinstance(desc_block, dict):
+        item_blk = desc_block.get("item") or desc_block.get("series") or desc_block
+        if isinstance(item_blk, dict):
+            title = title or str(item_blk.get("title") or "").strip()
+            naid = naid or str(item_blk.get("naId") or "").strip()
+            desc = str(item_blk.get("scopeAndContentNote") or "").strip()
+            prod_dates = item_blk.get("productionDateArray")
+            if isinstance(prod_dates, dict):
+                prod_dates = [prod_dates]
+            if isinstance(prod_dates, list) and prod_dates:
+                first_d = prod_dates[0]
+                if isinstance(first_d, dict):
+                    logical_d = first_d.get("proposableQualifiableDate") or first_d
+                    if isinstance(logical_d, dict):
+                        date_str = date_str or str(logical_d.get("logicalDate") or logical_d.get("year") or "").strip()
+
+    # Tìm URL ảnh từ objects.object hoặc digitalObjects hoặc url trực tiếp
+    candidate_urls: List[str] = []
+    for direct_k in ("image_url", "imageUrl", "objectUrl", "url"):
+        v = str(rec.get(direct_k) or "").strip()
+        if v and Path(urllib.parse.urlparse(v).path).suffix.lower() in ALLOWED_IMAGE_EXTS:
+            candidate_urls.append(v)
+
+    objs_root = rec.get("objects") or rec.get("digitalObjects")
+    if isinstance(objs_root, dict):
+        obj_list = objs_root.get("object") or objs_root.get("objects") or objs_root.get("digitalObject") or []
+    elif isinstance(objs_root, list):
+        obj_list = objs_root
+    else:
+        obj_list = []
+    if isinstance(obj_list, dict):
+        obj_list = [obj_list]
+
+    for obj in obj_list:
+        if not isinstance(obj, dict):
+            continue
+        file_info = obj.get("file") or obj
+        if isinstance(file_info, dict):
+            for uk in ("@url", "url", "path"):
+                u = str(file_info.get(uk) or "").strip()
+                if u and Path(urllib.parse.urlparse(u).path).suffix.lower() in ALLOWED_IMAGE_EXTS:
+                    candidate_urls.append(u)
+
+    if not candidate_urls:
+        return None
+    return candidate_urls[0], (title or f"NARA_{naid or 'Archive'}"), date_str, naid, _strip_html(desc)
+
+
+def _search_nara_images(
+    session: requests.Session,
+    queries: Sequence[str],
+    *,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Truy vấn API công khai của US National Archives (catalog.archives.gov) lấy ảnh quân sự Public Domain."""
+    collected: List[Dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    rows = min(30, max(limit * 2, 10))
+
+    for q in queries:
+        q_clean = str(q).strip()
+        if not q_clean:
+            continue
+        params = {
+            "q": q_clean,
+            "resultTypes": "item",
+            "rows": str(rows),
+        }
+        try:
+            resp = session.get(NARA_API_URL, params=params, timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception as e:
+            print(f"⚠️ Lỗi truy vấn NARA cho '{q_clean}': {e}", file=sys.stderr)
+            continue
+
+        for rec in _extract_nara_records(payload):
+            extracted = _extract_nara_image_url_and_meta(rec)
+            if not extracted:
+                continue
+            img_url, title, date_str, naid, desc = extracted
+            if img_url in seen_urls or FORBIDDEN_MEDIA_RE.search(f"{title} {desc}"):
+                continue
+            seen_urls.add(img_url)
+            ext = Path(urllib.parse.urlparse(img_url).path).suffix.lower() or ".jpg"
+            page_url = f"https://catalog.archives.gov/id/{naid}" if naid else img_url
+            collected.append(
+                {
+                    "provider": "nara",
+                    "query": q_clean,
+                    "title": title[:180],
+                    "author": "U.S. National Archives (NARA)",
+                    "year_or_date": date_str[:80],
+                    "description": desc[:400],
+                    "license": "Public Domain — U.S. National Archives",
+                    "mime": "image/jpeg" if ext in (".jpg", ".jpeg") else f"image/{ext.lstrip('.')}",
+                    "ext": ext,
+                    "width": _safe_int(rec.get("width")) or 1200,
+                    "height": _safe_int(rec.get("height")) or 900,
+                    "size_bytes": 0,
+                    "url": img_url,
+                    "page_url": page_url,
+                }
+            )
+            if len(collected) >= limit * 2:
+                break
+    return collected
+
+
 # ------------------------------------------------------------------ Mode 1: Images
 def run_mode_images(args: argparse.Namespace) -> int:
     queries = list(args.query or [])
-    if not queries:
-        raise ValueError("Cần truyền ít nhất 1 --query khi dùng --mode images.")
+    sources = parse_sources_arg(getattr(args, "sources", DEFAULT_SOURCES))
+    if not queries and not getattr(args, "urls", None):
+        raise ValueError("Cần truyền ít nhất 1 --query (hoặc --urls cho báo chí VN).")
+
+    if getattr(args, "urls", None) or (sources == ["vn_press"]):
+        return run_mode_vn_press(args)
 
     out_dir = _resolve_candidates_dir(args, "images")
     session = _make_session()
-    raw_items = _search_wikimedia(
-        session,
-        queries,
-        filetype="bitmap",
-        limit=args.limit,
-        exclude_modern=getattr(args, "exclude_modern", True),
-    )
+    raw_items: List[Dict[str, Any]] = []
+
+    if "wikimedia" in sources and queries:
+        raw_items.extend(
+            _search_wikimedia(
+                session,
+                queries,
+                filetype="bitmap",
+                limit=args.limit,
+                exclude_modern=getattr(args, "exclude_modern", True),
+            )
+        )
+    if "internet_archive" in sources and queries:
+        raw_items.extend(_search_internet_archive_images(session, queries, limit=args.limit))
+    if "nara" in sources and queries:
+        raw_items.extend(_search_nara_images(session, queries, limit=args.limit))
 
     accepted: List[Dict[str, Any]] = []
     seen_sha256: set[str] = set()
@@ -462,11 +821,11 @@ def run_mode_images(args: argparse.Namespace) -> int:
         if len(accepted) >= args.limit:
             break
         ext = item["ext"]
-        mime = item["mime"]
-        long_edge = max(item["width"], item["height"])
+        mime = item.get("mime", "")
+        long_edge = max(int(item.get("width") or 0), int(item.get("height") or 0))
         if ext not in ALLOWED_IMAGE_EXTS or (mime and mime not in ALLOWED_IMAGE_MIMES):
             continue
-        if long_edge < args.min_long_edge:
+        if long_edge > 0 and long_edge < args.min_long_edge:
             continue
 
         idx = len(accepted) + 1
@@ -477,7 +836,7 @@ def run_mode_images(args: argparse.Namespace) -> int:
             item["saved_file"] = ""
             item["sha256"] = ""
             accepted.append(item)
-            print(f"[DRY-RUN IMG #{idx}] {item['width']}x{item['height']} | {item['license']} | {item['title']}")
+            print(f"[DRY-RUN IMG #{idx}] ({item.get('provider')}) {item['width']}x{item['height']} | {item['license']} | {item['title']}")
             continue
 
         ok, err = _download_file(session, item["url"], dest, max_bytes=35 * 1024 * 1024)
@@ -524,6 +883,9 @@ def run_mode_images(args: argparse.Namespace) -> int:
 
     _write_candidates_manifest(out_dir, accepted, queries=queries, dry_run=args.dry_run, kind="images")
     print(f"\n📂 Đã lưu {len(accepted)} ứng viên ảnh tại: {out_dir}")
+
+    if "vn_press" in sources and queries:
+        run_mode_vn_press(args)
     return 0
 
 
@@ -772,11 +1134,12 @@ def run_mode_videos(args: argparse.Namespace) -> int:
     out_dir = _resolve_candidates_dir(args, "videos")
     max_bytes = int(max(1, args.max_size_mb) * 1024 * 1024)
     session = _make_session()
+    sources = parse_sources_arg(getattr(args, "sources", DEFAULT_SOURCES))
 
     raw_items: List[Dict[str, Any]] = []
-    if args.sources in ("all", "archive"):
+    if "internet_archive" in sources:
         raw_items.extend(_search_internet_archive_videos(session, queries, limit=args.limit, max_bytes=max_bytes))
-    if args.sources in ("all", "wikimedia"):
+    if "wikimedia" in sources:
         wm_vids = _search_wikimedia(
             session,
             queries,
@@ -1196,25 +1559,553 @@ def run_mode_commit_video(args: argparse.Namespace) -> int:
     return 0
 
 
+# ------------------------------------------------------------------ Mode 5 & 6: VN Press & Museum Staging + Promote
+def _extract_attr(tag_html: str, attr_name: str) -> str:
+    m = re.search(
+        rf"""\b{re.escape(attr_name)}\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))""",
+        tag_html,
+        re.IGNORECASE,
+    )
+    if not m:
+        return ""
+    raw = m.group(1) or m.group(2) or m.group(3) or ""
+    return html.unescape(raw).strip()
+
+
+def _pick_img_src_from_tag(img_tag: str, article_url: str) -> Tuple[str, str, int, int]:
+    """Lấy (full_url, alt_or_title, html_w, html_h) từ thẻ <img ...>."""
+    raw_src = ""
+    for attr in ("data-original", "data-src", "data-lazy-src", "src"):
+        cand = _extract_attr(img_tag, attr)
+        if cand and not cand.lower().startswith("data:image/"):
+            raw_src = cand
+            break
+    if not raw_src:
+        return "", "", 0, 0
+    full_url = urllib.parse.urljoin(article_url, raw_src)
+    alt_txt = _strip_html(_extract_attr(img_tag, "alt") or _extract_attr(img_tag, "title"))
+    hw = _safe_int(re.sub(r"[^\d]", "", _extract_attr(img_tag, "width")))
+    hh = _safe_int(re.sub(r"[^\d]", "", _extract_attr(img_tag, "height")))
+    return full_url, alt_txt, hw, hh
+
+
+def _is_valid_press_img_candidate(full_url: str, img_tag: str, hw: int, hh: int) -> bool:
+    if not full_url or _NON_CONTENT_IMG_RE.search(full_url):
+        return False
+    cls_id = f"{_extract_attr(img_tag, 'class')} {_extract_attr(img_tag, 'id')}".lower()
+    if any(tok in cls_id for tok in ("logo", "avatar", "icon", "banner", "share", "ads", "author-img")):
+        return False
+    # Nếu HTML ghi rõ cả width và height mà cạnh dài < 600px (hoặc cạnh ngắn < 120px) thì lọc bỏ sớm
+    if hw > 0 and hh > 0 and (max(hw, hh) < VN_PRESS_MIN_EDGE or min(hw, hh) < 120):
+        return False
+    if (hw > 0 and hw < 150) or (hh > 0 and hh < 150):
+        return False
+    return True
+
+
+def extract_vn_press_images_from_html(html_text: str, article_url: str) -> List[Dict[str, Any]]:
+    """Bóc tách danh sách ảnh trong bài báo/bảo tàng VN kèm chú thích (figcaption / td.caption / alt) và tên báo."""
+    if not html_text:
+        return []
+    publisher = resolve_vn_press_publisher(article_url)
+    cleaned_html = re.sub(r"<!--.*?-->", " ", html_text, flags=re.DOTALL)
+    cleaned_html = re.sub(r"<(?:script|style|nav|header|footer|aside)\b[^>]*>.*?</(?:script|style|nav|header|footer|aside)>", " ", cleaned_html, flags=re.DOTALL | re.IGNORECASE)
+
+    results_with_pos: List[Tuple[int, Dict[str, Any]]] = []
+    seen_urls: set[str] = set()
+
+    def _add_candidate(pos: int, img_tag: str, caption_raw: str) -> None:
+        full_url, alt_txt, hw, hh = _pick_img_src_from_tag(img_tag, article_url)
+        if not full_url or full_url in seen_urls:
+            return
+        if not _is_valid_press_img_candidate(full_url, img_tag, hw, hh):
+            return
+        caption = _strip_html(caption_raw) or alt_txt
+        if FORBIDDEN_MEDIA_RE.search(f"{full_url} {caption}"):
+            return
+        seen_urls.add(full_url)
+        results_with_pos.append(
+            (
+                pos,
+                {
+                    "image_url": full_url,
+                    "caption": caption[:360],
+                    "article_url": article_url,
+                    "publisher": publisher,
+                    "html_width": hw,
+                    "html_height": hh,
+                },
+            )
+        )
+
+    # 1. Khối <figure ...> ... <img ...> ... <figcaption ...>...</figcaption> </figure>
+    for fig_m in re.finditer(r"<figure\b[^>]*>(.*?)</figure>", cleaned_html, flags=re.DOTALL | re.IGNORECASE):
+        block = fig_m.group(1)
+        img_m = re.search(r"<img\b[^>]*>", block, flags=re.IGNORECASE)
+        if not img_m:
+            continue
+        cap_m = re.search(r"<figcaption\b[^>]*>(.*?)</figcaption>", block, flags=re.DOTALL | re.IGNORECASE)
+        if not cap_m:
+            cap_m = re.search(
+                r"""<(?:p|div|span|em)\b[^>]*(?:class|id)\s*=\s*["'][^"']*(?:caption|desc|chuthich|note)[^"']*["'][^>]*>(.*?)</(?:p|div|span|em)>""",
+                block,
+                flags=re.DOTALL | re.IGNORECASE,
+            )
+        _add_candidate(fig_m.start() + img_m.start(), img_m.group(0), cap_m.group(1) if cap_m else "")
+
+    # 2. Khối <table ...> chứa <img> và ô chú thích (chuẩn qdnd.vn / báo điện tử VN)
+    for tbl_m in re.finditer(r"<table\b[^>]*>(.*?)</table>", cleaned_html, flags=re.DOTALL | re.IGNORECASE):
+        block = tbl_m.group(1)
+        img_m = re.search(r"<img\b[^>]*>", block, flags=re.IGNORECASE)
+        if not img_m:
+            continue
+        cap_m = re.search(
+            r"""<td\b[^>]*(?:class\s*=\s*["'][^"']*(?:caption|img|desc|chuthich|note)[^"']*["'])[^>]*>(.*?)</td>""",
+            block,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        if not cap_m:
+            tds = re.findall(r"<td\b[^>]*>(.*?)</td>", block, flags=re.DOTALL | re.IGNORECASE)
+            non_img_tds = [_strip_html(t) for t in tds if "<img" not in t.lower() and _strip_html(t)]
+            cap_text = non_img_tds[0] if non_img_tds else ""
+        else:
+            cap_text = cap_m.group(1)
+        _add_candidate(tbl_m.start() + img_m.start(), img_m.group(0), cap_text)
+
+    # 3. Các thẻ <img> còn lại kèm đoạn chú thích ngay kế sau (hoặc alt/title)
+    img_with_next_re = re.compile(
+        r"(<img\b[^>]*>)(?:\s*</(?:a|p|div|span)>)*\s*"
+        r"(?:<(?:figcaption|em)\b[^>]*>(.*?)</(?:figcaption|em)>|"
+        r"""<(?:p|div|span)\b[^>]*(?:class|id)\s*=\s*["'][^"']*(?:caption|img-cap|photo-cap|chuthich|desc)[^"']*["'][^>]*>(.*?)</(?:p|div|span)>)?""",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    for m in img_with_next_re.finditer(cleaned_html):
+        img_tag = m.group(1)
+        cap_raw = m.group(2) or m.group(3) or ""
+        _add_candidate(m.start(), img_tag, cap_raw)
+
+    results_with_pos.sort(key=lambda pair: pair[0])
+    return [item for _, item in results_with_pos]
+
+
+def _discover_vn_press_article_urls(
+    session: requests.Session,
+    queries: Sequence[str],
+    *,
+    limit: int = 6,
+) -> List[str]:
+    """Tìm bài viết tư liệu lịch sử trên các tên miền báo chí / bảo tàng VN uy tín theo từ khóa."""
+    discovered: List[str] = []
+    seen: set[str] = set()
+    site_clause = " OR ".join(f"site:{dom}" for dom in list(VN_PRESS_DOMAINS.keys())[:6])
+
+    for q in queries:
+        q_clean = str(q).strip()
+        if not q_clean:
+            continue
+        full_q = f"{q_clean} ({site_clause})"
+        try:
+            resp = session.get(DDG_HTML_SEARCH_URL, params={"q": full_q}, timeout=REQUEST_TIMEOUT)
+            if resp.status_code != 200:
+                continue
+            html_body = resp.text
+        except Exception:
+            continue
+
+        # Bắt cả URL trực tiếp lẫn tham số uddg=... trong kết quả tìm kiếm
+        for raw_href in re.findall(r"""href\s*=\s*["']([^"']+)["']""", html_body, flags=re.IGNORECASE):
+            cand_url = html.unescape(raw_href)
+            if "uddg=" in cand_url:
+                parsed_qs = urllib.parse.parse_qs(urllib.parse.urlparse(cand_url).query)
+                if parsed_qs.get("uddg"):
+                    cand_url = parsed_qs["uddg"][0]
+            host = re.sub(r"^www\.", "", urllib.parse.urlparse(cand_url).netloc.lower())
+            if any(host == dom or host.endswith("." + dom) for dom in VN_PRESS_DOMAINS):
+                if cand_url not in seen:
+                    seen.add(cand_url)
+                    discovered.append(cand_url)
+                    if len(discovered) >= limit:
+                        return discovered
+    return discovered
+
+
+def create_press_contact_sheet(
+    staging_dir: Path,
+    items: Sequence[Dict[str, Any]],
+    out_path: Optional[Path] = None,
+) -> Optional[Path]:
+    """Tạo ảnh tổng hợp đánh số `staging_press/contact_sheet.jpg` để duyệt trực quan trước khi --promote."""
+    dest_jpg = out_path or (staging_dir / "contact_sheet.jpg")
+    valid_items = [it for it in items if it.get("filename") and (staging_dir / str(it["filename"])).is_file()]
+    if not valid_items:
+        return None
+
+    cols = min(3, max(1, len(valid_items)))
+    rows = (len(valid_items) + cols - 1) // cols
+    tile_w, tile_h = 420, 310
+    img_box_h = 216
+    pad = 14
+    header_h = 68
+
+    canvas_w = cols * tile_w + (cols + 1) * pad
+    canvas_h = header_h + rows * tile_h + (rows + 1) * pad
+    sheet = Image.new("RGB", (canvas_w, canvas_h), (20, 22, 28))
+    draw = ImageDraw.Draw(sheet)
+
+    font_header = _load_pil_font(20)
+    font_badge = _load_pil_font(16)
+    font_meta = _load_pil_font(14)
+
+    draw.text(
+        (pad, 14),
+        f"VN PRESS / MUSEUM STAGING CONTACT SHEET ({len(valid_items)} ảnh >= {VN_PRESS_MIN_EDGE}px)",
+        fill=(255, 224, 0),
+        font=font_header,
+    )
+    draw.text(
+        (pad, 40),
+        "Dùng lệnh: --promote <id>:<scene_num> (vd: --promote 1:3) để nạp ảnh đã chọn vào assets/",
+        fill=(195, 205, 218),
+        font=font_meta,
+    )
+
+    for idx, it in enumerate(valid_items):
+        col = idx % cols
+        row = idx // cols
+        x0 = pad + col * (tile_w + pad)
+        y0 = header_h + pad + row * (tile_h + pad)
+        draw.rectangle([x0, y0, x0 + tile_w, y0 + tile_h], fill=(12, 14, 18), outline=(72, 78, 92))
+
+        img_file = staging_dir / str(it["filename"])
+        try:
+            with Image.open(img_file) as im:
+                rgb = ImageOps.exif_transpose(im).convert("RGB")
+                rgb.thumbnail((tile_w - 8, img_box_h - 8), Image.Resampling.LANCZOS)
+                px = x0 + (tile_w - rgb.width) // 2
+                py = y0 + 4 + (img_box_h - rgb.height) // 2
+                sheet.paste(rgb, (px, py))
+        except Exception:
+            pass
+
+        item_id = it.get("id", idx + 1)
+        res_txt = f"#{item_id} | {it.get('width', 0)}x{it.get('height', 0)}"
+        draw.rectangle([x0 + 6, y0 + 6, x0 + 150, y0 + 32], fill=(0, 0, 0))
+        draw.text((x0 + 12, y0 + 9), res_txt, fill=(255, 230, 80), font=font_badge)
+
+        pub_txt = str(it.get("publisher") or "")[:48]
+        cap_txt = str(it.get("caption") or it.get("filename") or "")[:54]
+        draw.text((x0 + 10, y0 + img_box_h + 10), pub_txt, fill=(140, 230, 175), font=font_meta)
+        draw.text((x0 + 10, y0 + img_box_h + 34), cap_txt, fill=(230, 234, 240), font=font_meta)
+        draw.text((x0 + 10, y0 + img_box_h + 56), str(it.get("filename") or "")[:48], fill=(155, 162, 175), font=font_meta)
+
+    dest_jpg.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(dest_jpg, format="JPEG", quality=92)
+    return dest_jpg
+
+
+def _resolve_staging_press_dir(args: argparse.Namespace) -> Path:
+    if getattr(args, "episode_dir", None):
+        base = Path(args.episode_dir).resolve()
+    elif getattr(args, "out_dir", None):
+        base = Path(args.out_dir).resolve()
+    elif getattr(args, "episode_name", None):
+        base = (DEFAULT_CANDIDATES_ROOT / _safe_slug(args.episode_name, max_len=64)).resolve()
+    else:
+        base = (DEFAULT_CANDIDATES_ROOT / "default_episode").resolve()
+    staging_dir = base if base.name == "staging_press" else (base / "staging_press")
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    return staging_dir
+
+
+def stage_vn_press_images(
+    session: requests.Session,
+    article_urls: Sequence[str],
+    *,
+    project_dir: Path,
+    min_long_edge: int = VN_PRESS_MIN_EDGE,
+    limit: int = 24,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Tải HTML bài báo/bảo tàng VN, lọc ảnh thực >= 600px vào `<project_dir>/staging_press/`, tạo manifest + contact sheet."""
+    staging_dir = project_dir if project_dir.name == "staging_press" else (project_dir / "staging_press")
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    eff_min_edge = max(VN_PRESS_MIN_EDGE, int(min_long_edge or VN_PRESS_MIN_EDGE))
+
+    extracted_candidates: List[Dict[str, Any]] = []
+    seen_img_urls: set[str] = set()
+
+    for art_url in article_urls:
+        u = str(art_url or "").strip()
+        if not u:
+            continue
+        try:
+            resp = session.get(u, timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            resp.encoding = resp.apparent_encoding or "utf-8"
+            html_text = resp.text
+        except Exception as e:
+            print(f"⚠️ Không thể tải bài viết '{u}': {e}", file=sys.stderr)
+            continue
+
+        for img_cand in extract_vn_press_images_from_html(html_text, u):
+            img_u = img_cand["image_url"]
+            if img_u in seen_img_urls:
+                continue
+            seen_img_urls.add(img_u)
+            extracted_candidates.append(img_cand)
+
+    manifest_items: List[Dict[str, Any]] = []
+    seen_sha256: set[str] = set()
+
+    for cand in extracted_candidates:
+        if len(manifest_items) >= limit:
+            break
+        item_id = len(manifest_items) + 1
+        img_url = cand["image_url"]
+        slug_base = cand.get("caption") or Path(urllib.parse.urlparse(img_url).path).stem or f"press_{item_id:02d}"
+        ext = Path(urllib.parse.urlparse(img_url).path).suffix.lower()
+        if ext not in ALLOWED_IMAGE_EXTS:
+            ext = ".jpg"
+
+        if dry_run:
+            manifest_items.append(
+                {
+                    "id": item_id,
+                    "filename": f"press_{item_id:02d}_{_safe_slug(slug_base, max_len=42)}.jpg",
+                    "width": int(cand.get("html_width") or 0),
+                    "height": int(cand.get("html_height") or 0),
+                    "caption": cand.get("caption") or "",
+                    "article_url": cand.get("article_url") or "",
+                    "publisher": cand.get("publisher") or "",
+                    "image_url": img_url,
+                    "license": EDITORIAL_PRESS_LICENSE,
+                    "sha256": "",
+                }
+            )
+            continue
+
+        raw_dest = staging_dir / f"press_{item_id:02d}_{_safe_slug(slug_base, max_len=42)}{ext}"
+        ok, err = _download_file(session, img_url, raw_dest, max_bytes=25 * 1024 * 1024)
+        if not ok or not raw_dest.is_file() or raw_dest.stat().st_size == 0:
+            raw_dest.unlink(missing_ok=True)
+            continue
+
+        try:
+            with Image.open(raw_dest) as im:
+                im.load()
+                orig_w, orig_h = ImageOps.exif_transpose(im).size
+        except Exception:
+            raw_dest.unlink(missing_ok=True)
+            continue
+
+        # Bộ lọc kích thước thực >= 600px (loại avatar, icon, banner quảng cáo, nút chia sẻ)
+        if max(orig_w, orig_h) < eff_min_edge or min(orig_w, orig_h) < 120:
+            raw_dest.unlink(missing_ok=True)
+            print(f"   ⏭️ Loại ảnh nhỏ/banner ({orig_w}x{orig_h} < {eff_min_edge}px): {Path(img_url).name}")
+            continue
+
+        norm_path, (w, h), norm_err = _normalize_candidate_jpeg(raw_dest, max_long_edge=CANDIDATE_MAX_LONG_EDGE)
+        if norm_path is None:
+            print(f"   ⚠️ Lỗi chuẩn hóa ảnh báo chí: {norm_err}")
+            continue
+
+        sha256 = _sha256_file(norm_path)
+        if sha256 in seen_sha256:
+            norm_path.unlink(missing_ok=True)
+            continue
+        seen_sha256.add(sha256)
+
+        final_name = f"press_{item_id:02d}_{_safe_slug(slug_base, max_len=42)}.jpg"
+        final_path = staging_dir / final_name
+        if norm_path.resolve() != final_path.resolve():
+            os.replace(norm_path, final_path)
+
+        entry = {
+            "id": item_id,
+            "filename": final_path.name,
+            "width": w,
+            "height": h,
+            "caption": cand.get("caption") or "",
+            "article_url": cand.get("article_url") or "",
+            "publisher": cand.get("publisher") or "",
+            "image_url": img_url,
+            "license": EDITORIAL_PRESS_LICENSE,
+            "sha256": sha256,
+        }
+        manifest_items.append(entry)
+        print(f"✓ PRESS #{item_id}: {final_path.name} ({w}x{h} | {entry['publisher']} | {entry['caption'][:50]})")
+
+    contact_sheet_path: Optional[Path] = None
+    if not dry_run and manifest_items:
+        contact_sheet_path = create_press_contact_sheet(staging_dir, manifest_items)
+
+    manifest_payload = {
+        "kind": "vn_press_staging",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "min_long_edge": eff_min_edge,
+        "article_urls": list(article_urls),
+        "contact_sheet": contact_sheet_path.name if contact_sheet_path else "",
+        "count": len(manifest_items),
+        "items": manifest_items,
+    }
+    manifest_path = staging_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n📰 Đã lưu {len(manifest_items)} ảnh báo chí/bảo tàng tại: {staging_dir}")
+    if contact_sheet_path:
+        print(f"🖼️ Contact sheet duyệt nhanh: {contact_sheet_path}")
+    return manifest_payload
+
+
+def promote_staged_press_images(
+    project_dir: Path,
+    promote_specs: Sequence[str],
+    *,
+    args: Optional[argparse.Namespace] = None,
+) -> List[Path]:
+    """Đưa ảnh đã duyệt từ `<project_dir>/staging_press/` vào `assets/{scene:03d}.jpg` và ghi `archive_sources.json`."""
+    ep_dir = project_dir.resolve()
+    staging_dir = ep_dir / "staging_press"
+    manifest_path = staging_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"Không tìm thấy manifest staging báo chí tại: {manifest_path}")
+
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    items = manifest_data.get("items") or []
+    by_id: Dict[int, Dict[str, Any]] = {int(it["id"]): dict(it) for it in items if "id" in it}
+
+    pairs: List[Tuple[int, int]] = []
+    for raw_spec in promote_specs:
+        for tok in str(raw_spec or "").split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            m = re.fullmatch(r"(\d+)\s*:\s*(\d+)", tok)
+            if not m:
+                raise ValueError(f"--promote phải có dạng <id>:<scene_num> (vd: 1:3), nhận: '{tok}'")
+            pairs.append((int(m.group(1)), int(m.group(2))))
+
+    if not pairs:
+        raise ValueError("Không có cặp <id>:<scene_num> hợp lệ nào cho --promote.")
+
+    eff_args = args or argparse.Namespace(
+        assets_dir=None,
+        youtube_16x9=False,
+        target_size=None,
+        crop_margins=None,
+        note="",
+    )
+    assets_dir = _resolve_commit_assets_dir(ep_dir, eff_args)
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    target_size = _parse_target_size(eff_args)
+    is_parallel = assets_dir.name != "assets"
+
+    committed_paths: List[Path] = []
+    for press_id, scene_num in pairs:
+        if press_id not in by_id:
+            raise KeyError(f"Không tìm thấy ảnh id={press_id} trong {manifest_path}")
+        meta = by_id[press_id]
+        src_img = staging_dir / str(meta["filename"])
+        if not src_img.is_file():
+            raise FileNotFoundError(f"Không tìm thấy file ảnh staging: {src_img}")
+
+        out_jpg = assets_dir / f"{scene_num:03d}.jpg"
+        with Image.open(src_img) as img:
+            rgb = ImageOps.exif_transpose(img).convert("RGB")
+            if target_size is not None:
+                rgb = ImageOps.fit(rgb, target_size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.35))
+            w, h = rgb.size
+            rgb.save(out_jpg, format="JPEG", quality=95, subsampling=0)
+
+        publisher = str(meta.get("publisher") or resolve_vn_press_publisher(meta.get("article_url") or "")).strip()
+        caption = str(meta.get("caption") or meta.get("filename") or out_jpg.name).strip()
+        entry = {
+            "scene_id": scene_num,
+            "asset_file": f"{assets_dir.name}/{out_jpg.name}",
+            "media_type": "image",
+            "title": caption,
+            "provider": "vn_press",
+            "publisher": publisher,
+            "author": publisher,
+            "year_or_date": "",
+            "license": EDITORIAL_PRESS_LICENSE,
+            "source_url": str(meta.get("article_url") or meta.get("image_url") or ""),
+            "image_url": str(meta.get("image_url") or ""),
+            "crop_margins": "",
+            "resolution": f"{w}x{h}",
+            "sha256": _sha256_file(out_jpg),
+            "note": getattr(eff_args, "note", "") or f"Promoted from staging_press #{press_id}",
+            "committed_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        sources_path = _update_archive_sources(ep_dir, scene_num, entry, is_parallel_16x9=is_parallel)
+        committed_paths.append(out_jpg)
+        print(f"✓ Đã promote ảnh #{press_id} -> {out_jpg} ({w}x{h} | {EDITORIAL_PRESS_LICENSE}) | Nguồn: {sources_path}")
+
+    return committed_paths
+
+
+def run_mode_vn_press(args: argparse.Namespace) -> int:
+    session = _make_session()
+    urls = list(getattr(args, "urls", None) or [])
+    queries = list(getattr(args, "query", None) or [])
+    if not urls and queries:
+        urls = _discover_vn_press_article_urls(session, queries, limit=max(4, min(10, args.limit)))
+    if not urls:
+        raise ValueError("Chế độ vn_press yêu cầu truyền --urls <url1> <url2>... hoặc --query '...'")
+
+    staging_dir = _resolve_staging_press_dir(args)
+    project_dir = staging_dir.parent
+    min_edge = max(VN_PRESS_MIN_EDGE, int(getattr(args, "min_long_edge", VN_PRESS_MIN_EDGE) or VN_PRESS_MIN_EDGE))
+    stage_vn_press_images(
+        session,
+        urls,
+        project_dir=project_dir,
+        min_long_edge=min_edge,
+        limit=args.limit,
+        dry_run=args.dry_run,
+    )
+    return 0
+
+
+def run_mode_promote(args: argparse.Namespace) -> int:
+    if not getattr(args, "episode_dir", None):
+        raise ValueError("--promote yêu cầu truyền --episode-dir <thư_mục_tập>.")
+    specs = list(getattr(args, "promote", None) or [])
+    promote_staged_press_images(Path(args.episode_dir), specs, args=args)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Săn ảnh (Wikimedia Commons) & video (Internet Archive / Wikimedia) tư liệu lịch sử thật V5.2.",
+        description="Săn tư liệu lịch sử thật đa nguồn V5.5 (Wikimedia + Internet Archive Video/Image + NARA + Báo chí/Bảo tàng VN).",
     )
     p.add_argument(
         "--mode",
-        required=True,
-        choices=["images", "videos", "commit-image", "commit-video"],
-        help="Chế độ chạy: săn ảnh, săn video + contact sheet, hoặc chuẩn hóa nạp vào assets/.",
+        required=False,
+        default=None,
+        choices=["images", "videos", "commit-image", "commit-video", "vn-press", "promote"],
+        help="Chế độ chạy (tùy chọn khi đã dùng --urls, --promote hoặc --media-type).",
+    )
+    p.add_argument(
+        "--media-type",
+        choices=["image", "video", "all"],
+        default=None,
+        help="Loại tư liệu cần tìm: image / video / all (mặc định: image, hoặc theo --mode).",
     )
     p.add_argument("--query", action="append", help="Từ khóa tìm kiếm (có thể truyền nhiều --query cho Việt/Anh/Pháp).")
-    p.add_argument("--episode-dir", help="Đường dẫn thư mục tập (vd: story_mode/projects/.../Dien_Bien_Phu_Tap_04).")
+    p.add_argument("--urls", nargs="+", help="Danh sách URL bài báo / bảo tàng VN (qdnd.vn, baotanglichsu.vn...) để bóc ảnh vào staging_press/.")
+    p.add_argument("--promote", action="append", help="Nạp ảnh từ staging_press/ vào assets/ theo cú pháp <id>:<scene_num> (vd: --promote 1:3).")
+    p.add_argument("--episode-dir", "--project-dir", dest="episode_dir", help="Đường dẫn thư mục tập (vd: story_mode/projects/.../Dien_Bien_Phu_Tap_04).")
     p.add_argument("--episode-name", help="Tên thư mục con lưu ứng viên trong automation/debug/archive_candidates/.")
     p.add_argument("--out-dir", help="Thư mục tùy chỉnh lưu ứng viên images/videos (ghi đè --episode-name).")
     p.add_argument("--limit", type=int, default=8, help="Số lượng ứng viên tối đa cần tải (mặc định: 8).")
-    p.add_argument("--min-long-edge", type=int, default=800, help="Cạnh dài tối thiểu cho ảnh (mặc định: 800px).")
+    p.add_argument("--min-long-edge", type=int, default=800, help="Cạnh dài tối thiểu cho ảnh quốc tế (mặc định: 800px; vn_press mặc định >= 600px).")
     p.add_argument("--min-short-edge", type=int, default=360, help="Cạnh ngắn tối thiểu cho video (mặc định: 360px).")
     p.add_argument("--max-size-mb", type=int, default=250, help="Dung lượng file video tối đa cho phép tải (mặc định: 250MB).")
-    p.add_argument("--sources", choices=["all", "archive", "wikimedia"], default="all", help="Nguồn video: all / archive / wikimedia.")
+    p.add_argument(
+        "--sources",
+        default=DEFAULT_SOURCES,
+        help="Danh sách nguồn phân tách dấu phẩy: wikimedia,internet_archive,nara,vn_press hoặc all (mặc định: wikimedia,internet_archive,nara).",
+    )
     p.add_argument("--no-contact-sheet", action="store_true", help="Tắt tự động tạo lưới ảnh xem trước 6 khung hình.")
     p.add_argument("--dry-run", action="store_true", help="Chỉ truy vấn metadata kiểm tra nguồn & giấy phép, không tải file media.")
     mod_group = p.add_mutually_exclusive_group()
@@ -1252,10 +2143,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.mode == "images":
-        return run_mode_images(args)
-    if args.mode == "videos":
-        return run_mode_videos(args)
+    if getattr(args, "promote", None):
+        return run_mode_promote(args)
+    if getattr(args, "urls", None) or args.mode == "vn-press":
+        return run_mode_vn_press(args)
     if args.mode == "commit-image":
         if not args.input or not args.episode_dir or args.scene is None:
             raise ValueError("--mode commit-image yêu cầu --input, --episode-dir và --scene.")
@@ -1264,7 +2155,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if not args.input or not args.episode_dir or args.scene is None:
             raise ValueError("--mode commit-video yêu cầu --input, --episode-dir và --scene.")
         return run_mode_commit_video(args)
-    return 1
+    if args.mode == "promote":
+        return run_mode_promote(args)
+
+    media_type = args.media_type
+    if media_type is None:
+        media_type = "video" if args.mode == "videos" else "image"
+
+    if media_type == "video":
+        return run_mode_videos(args)
+    if media_type == "all":
+        rc_img = run_mode_images(args)
+        rc_vid = run_mode_videos(args)
+        return rc_img or rc_vid
+    return run_mode_images(args)
 
 
 if __name__ == "__main__":

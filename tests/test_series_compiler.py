@@ -676,3 +676,394 @@ def test_parallel_assets_16x9_priority_fallback_and_metadata(tmp_path):
     assert comp["assets_16x9_summary"]["fallback_assets_count"] == 1
     assert comp["episodes"][0]["native_16x9_count"] == 1
     assert comp["episodes"][0]["fallback_assets_count"] == 1
+
+
+# ==============================================================================
+# 7. Đợt 4: subtitle_mode="none", Watermark 4 góc, xfade, Smart Clip Fit & Codec
+# ==============================================================================
+def test_subtitle_mode_none_watermark_xfade_smart_clip_fit_and_codec(tmp_path, monkeypatch):
+    from pysubs2 import Alignment, SSAFile
+
+    from core.series_compiler import (
+         VALID_SUBTITLE_MODES,
+        VALID_VIDEO_CODECS,
+        VALID_WATERMARK_POSITIONS,
+        VALID_XFADE_TRANSITIONS,
+        _render_scene_video_16x9,
+        build_final_video_encode_args,
+        normalize_watermark_opacity,
+        normalize_watermark_position,
+        normalize_xfade_settings,
+        resolve_effective_watermark_text,
+        write_watermark_ass,
+    )
+
+    assert VALID_SUBTITLE_MODES == ("none", "srt_only", "burn_and_srt")
+    assert VALID_WATERMARK_POSITIONS == ("top_left", "top_right", "bottom_left", "bottom_right")
+    assert VALID_XFADE_TRANSITIONS == ("fade", "fadeblack", "none")
+    assert VALID_VIDEO_CODECS == ("h264", "h265")
+
+    # 1. Kiểm tra Watermark 4 góc + độ rõ 0.10–1.00 + bật/tắt
+    expected_align = {
+        "top_left": Alignment.TOP_LEFT,
+        "top_right": Alignment.TOP_RIGHT,
+        "bottom_left": Alignment.BOTTOM_LEFT,
+        "bottom_right": Alignment.BOTTOM_RIGHT,
+    }
+    for pos, align in expected_align.items():
+        ass_file = tmp_path / f"wm_{pos}.ass"
+        write_watermark_ass(ass_file, "Kênh Sử Việt 16:9", position=pos, opacity=0.40, total_duration=12.0)
+        subs = SSAFile.load(str(ass_file), encoding="utf-8")
+        st = subs.styles["YTSeriesWatermark"]
+        assert st.alignment == align
+        assert st.primarycolor.a == int(round((1.0 - 0.40) * 255))
+        assert subs.info["PlayResX"] == "1920"
+        assert subs.info["PlayResY"] == "1080"
+
+    assert normalize_watermark_opacity(0.02) == 0.10
+    assert normalize_watermark_opacity(1.50) == 1.00
+    assert normalize_watermark_opacity(40) == 0.40
+    assert normalize_watermark_position("bottom_right") == "bottom_right"
+    assert normalize_watermark_position("invalid_corner") == "top_left"
+
+    cfg_wm_off = SeriesCompileConfig(watermark_text="Kênh A", watermark_enabled=False)
+    assert resolve_effective_watermark_text(cfg_wm_off) is None
+    cfg_wm_on = SeriesCompileConfig(watermark_text="Kênh A", watermark_enabled=True)
+    assert resolve_effective_watermark_text(cfg_wm_on) == "Kênh A"
+
+    # 2. Kiểm tra chuẩn hóa xfade & tham số mã hóa H.264 / H.265
+    assert normalize_xfade_settings("fadeblack", 0.45) == ("fadeblack", 0.45)
+    assert normalize_xfade_settings("fade", 0.05) == ("fade", 0.15)
+    assert normalize_xfade_settings("fade", 1.20) == ("fade", 0.80)
+    assert normalize_xfade_settings("none", 0.50) == ("none", 0.0)
+
+    args_264 = build_final_video_encode_args(SeriesCompileConfig(video_codec="h264", crf=21, preset="veryfast"))
+    assert "libx264" in args_264
+    args_265 = build_final_video_encode_args(SeriesCompileConfig(video_codec="h265", crf=23, preset="fast"))
+    assert "libx265" in args_265 and "hvc1" in args_265
+
+    # 3. Kiểm tra Smart Clip Fit (True: dùng setpts kéo giãn mượt; False: dùng -stream_loop -1)
+    src_mp4 = tmp_path / "short_clip.mp4"
+    _make_solid_mp4(src_mp4, (1280, 720), duration_sec=1.5)
+    recorded_cmds: list[list[str]] = []
+    real_run_ffmpeg = __import__("core.series_compiler", fromlist=["run_ffmpeg"]).run_ffmpeg
+
+    def spy_run_ffmpeg(cmd, *a, **kw):
+        recorded_cmds.append(list(cmd))
+        return real_run_ffmpeg(cmd, *a, **kw)
+
+    monkeypatch.setattr("core.series_compiler.run_ffmpeg", spy_run_ffmpeg)
+    _render_scene_video_16x9(
+        src_mp4,
+        1.95,  # 1.95 / 1.50 = 1.30 <= 1.45 -> kích hoạt setpts khi smart_clip_fit=True
+        tmp_path / "fit_on.mkv",
+        motion="static",
+        layout_mode="smart",
+        is_video=True,
+        is_archival=True,
+        anti_ai_level="off",
+        crf=24,
+        preset="ultrafast",
+        smart_clip_fit=True,
+    )
+    assert any("setpts=" in token for token in recorded_cmds[-1])
+    assert "-stream_loop" not in recorded_cmds[-1]
+
+    _render_scene_video_16x9(
+        src_mp4,
+        1.95,
+        tmp_path / "fit_off.mkv",
+        motion="static",
+        layout_mode="smart",
+        is_video=True,
+        is_archival=True,
+        anti_ai_level="off",
+        crf=24,
+        preset="ultrafast",
+        smart_clip_fit=False,
+    )
+    assert "-stream_loop" in recorded_cmds[-1]
+    assert not any("setpts=" in token for token in recorded_cmds[-1])
+
+    # 4. E2E compile_series_youtube với subtitle_mode="none", watermark bottom_right, xfade="fadeblack"
+    series_dir = tmp_path / "NoSub_Series"
+    ep1 = series_dir / "Tap_01"
+    ep1_assets = ep1 / "assets_16x9"
+    _make_solid_mp4(ep1_assets / "001.mp4", (1280, 720), duration_sec=1.6)
+    _make_solid_image(ep1_assets / "002.png", (1920, 1080), (40, 90, 130))
+
+    speeches = [
+        "Cảnh đầu kiểm tra chuyển cảnh mờ qua đen.",
+        "Cảnh hai không đốt phụ đề và không tạo file srt.",
+    ]
+    _make_storyboard(
+        ep1,
+        "Tap_01_Khong_Phu_De",
+        [
+            {"id": 1, "speech": speeches[0], "motion": "static"},
+            {"id": 2, "speech": speeches[1], "motion": "zoom_in"},
+        ],
+    )
+    _synthesize_full_audio_and_alignment(
+        speeches,
+        ep1 / "assets" / "full_audio.wav",
+        ep1 / "assets" / "alignment.json",
+        tmp_path,
+    )
+
+    out_dir = tmp_path / "export_no_sub"
+    cfg = SeriesCompileConfig(
+        series_name="NoSub_Test",
+        series_title="Series Không Phụ Đề",
+        output_dir=out_dir,
+        subtitle_mode="none",
+        watermark_text="Sử Việt 16:9",
+        watermark_enabled=True,
+        watermark_position="bottom_right",
+        watermark_opacity=0.35,
+        xfade_transition="fadeblack",
+        xfade_duration=0.25,
+        smart_clip_fit=True,
+        video_codec="h264",
+        include_chapter_cards=False,
+        include_end_credits=False,
+        loudnorm_youtube=False,
+        speed_factor=1.0,
+        crf=24,
+        preset="ultrafast",
+        work_root=tmp_path / "work_nosub",
+    )
+
+    res = compile_series_youtube(series_dir, cfg)
+    assert res.srt_path is None
+    assert res.to_dict()["srt_path"] is None
+    assert not (out_dir / "NoSub_Test_subtitles.srt").exists()
+    assert list(out_dir.glob("*.srt")) == []
+
+    assert res.video_path.is_file() and res.video_path.stat().st_size > 0
+    assert res.description_path.is_file()
+    assert res.report_path.is_file()
+
+    desc_txt = res.description_path.read_text(encoding="utf-8")
+    assert "00:00 Phần 1:" in desc_txt
+
+    comp = json.loads(res.report_path.read_text(encoding="utf-8"))
+    assert comp["outputs"]["subtitles_srt"] is None
+    assert comp["settings"]["subtitle_mode"] == "none"
+    assert comp["settings"]["watermark_enabled"] is True
+    assert comp["settings"]["watermark_position"] == "bottom_right"
+    assert comp["settings"]["watermark_opacity"] == 0.35
+    assert comp["settings"]["xfade_transition"] == "fadeblack"
+    assert comp["settings"]["xfade_duration"] == 0.25
+    assert comp["settings"]["smart_clip_fit"] is True
+    assert comp["settings"]["video_codec"] == "h264"
+
+
+# ==============================================================================
+# 8. Đợt 5: Lower-Third on_screen_text, Nhãn Chương La Mã & Film Grain / Vignette
+# ==============================================================================
+def test_documentary_graphics_lower_third_chapter_badge_and_film_grain(tmp_path):
+    from pysubs2 import Alignment, SSAFile
+
+    from core.series_compiler import (
+        FILM_GRAIN_VIGNETTE_VF,
+        LOWER_THIRD_MARGIN_V_DEFAULT,
+        LOWER_THIRD_MARGIN_V_RAISED,
+        ChapterMarker,
+        build_episode_lower_thirds,
+        format_chapter_badge_text,
+        resolve_chapter_badge_position,
+        resolve_lower_third_margin_v,
+        to_roman,
+        write_chapter_badge_ass,
+        write_lower_third_ass,
+    )
+    from core.story_schema import StoryScene
+
+    # 1. Số La Mã & định dạng Nhãn Chương + tự tránh đụng Watermark góc trên phải
+    assert [to_roman(i) for i in (1, 2, 3, 4, 5, 9, 10)] == ["I", "II", "III", "IV", "V", "IX", "X"]
+    assert format_chapter_badge_text(1, "Bối cảnh Đông Dương") == "CHƯƠNG I · BỐI CẢNH ĐÔNG DƯƠNG"
+    assert format_chapter_badge_text(4, "Đồi A1 rực lửa") == "CHƯƠNG IV · ĐỒI A1 RỰC LỬA"
+
+    cfg_default = SeriesCompileConfig(watermark_enabled=True, watermark_position="top_left")
+    assert resolve_chapter_badge_position(cfg_default) == "top_right"
+
+    cfg_wm_top_right = SeriesCompileConfig(watermark_enabled=True, watermark_position="top_right")
+    assert resolve_chapter_badge_position(cfg_wm_top_right) == "top_left"
+
+    cfg_wm_disabled_tr = SeriesCompileConfig(watermark_enabled=False, watermark_position="top_right")
+    assert resolve_chapter_badge_position(cfg_wm_disabled_tr) == "top_right"
+
+    chapters = [
+        ChapterMarker(
+            chapter_index=1,
+            episode_id="Tap_01",
+            chapter_title="Mở màn chiến dịch",
+            start_sec=0.0,
+            episode_start_sec=2.5,  # Sau Thẻ chương 2.5s
+            duration_sec=10.0,
+            card_duration_sec=2.5,
+        ),
+        ChapterMarker(
+            chapter_index=2,
+            episode_id="Tap_02",
+            chapter_title="Quyết định lịch sử",
+            start_sec=12.5,
+            episode_start_sec=15.0,  # Sau Thẻ chương thứ 2 (12.5..15.0)
+            duration_sec=8.0,        # Kết thúc ở 23.0s trước End Credits
+            card_duration_sec=2.5,
+        ),
+    ]
+    badge_ass_tr = tmp_path / "badge_default.ass"
+    write_chapter_badge_ass(badge_ass_tr, chapters, config=cfg_default)
+    subs_tr = SSAFile.load(str(badge_ass_tr), encoding="utf-8")
+    assert subs_tr.styles["YTSeriesChapterBadge"].alignment == Alignment.TOP_RIGHT
+    assert len(subs_tr.events) == 2
+    assert (subs_tr.events[0].start, subs_tr.events[0].end) == (2500, 12500)
+    assert "CHƯƠNG I · MỞ MÀN CHIẾN DỊCH" in subs_tr.events[0].text
+    assert (subs_tr.events[1].start, subs_tr.events[1].end) == (15000, 23000)
+    assert "CHƯƠNG II · QUYẾT ĐỊNH LỊCH SỬ" in subs_tr.events[1].text
+
+    badge_ass_tl = tmp_path / "badge_shifted.ass"
+    write_chapter_badge_ass(badge_ass_tl, chapters, config=cfg_wm_top_right)
+    subs_tl = SSAFile.load(str(badge_ass_tl), encoding="utf-8")
+    assert subs_tl.styles["YTSeriesChapterBadge"].alignment == Alignment.TOP_LEFT
+
+    # 2. Thanh Lower-Third mốc lịch sử: thời lượng hiển thị, fade và tự nâng MarginV
+    kept_scenes = [
+        StoryScene(id=1, speech="Cảnh 1", on_screen_text="THÁNG 11/1953 · MƯỜNG THANH"),
+        StoryScene(id=2, speech="Cảnh 2 không có nhãn", on_screen_text=""),
+        StoryScene(id=3, speech="Cảnh 3 ngắn", on_screen_text="ĐỒI HIM LAM · 13/03/1954"),
+    ]
+    cues = build_episode_lower_thirds(
+        kept_scenes,
+        timeline_starts=[0.0, 5.0, 8.0],
+        scene_durations=[5.0, 3.0, 2.0],
+        episode_offset_sec=2.5,
+    )
+    assert len(cues) == 2
+    # Cảnh 1: dur=5.0 -> min(3.5, max(1.2, 4.7)) = 3.5s -> (2.5, 6.0)
+    assert cues[0] == (2.5, 6.0, "THÁNG 11/1953 · MƯỜNG THANH")
+    # Cảnh 3: dur=2.0 -> min(3.5, max(1.2, 1.7)) = 1.7s -> (10.5, 12.2)
+    assert cues[1] == (10.5, 12.2, "ĐỒI HIM LAM · 13/03/1954")
+
+    assert resolve_lower_third_margin_v(SeriesCompileConfig(subtitle_mode="srt_only", watermark_position="top_left")) == LOWER_THIRD_MARGIN_V_DEFAULT
+    assert resolve_lower_third_margin_v(SeriesCompileConfig(subtitle_mode="burn_and_srt")) == LOWER_THIRD_MARGIN_V_RAISED
+    assert resolve_lower_third_margin_v(SeriesCompileConfig(subtitle_mode="none", watermark_enabled=True, watermark_position="bottom_left")) == LOWER_THIRD_MARGIN_V_RAISED
+    assert resolve_lower_third_margin_v(SeriesCompileConfig(subtitle_mode="none", watermark_enabled=False, watermark_position="bottom_left")) == LOWER_THIRD_MARGIN_V_DEFAULT
+
+    lt_ass_norm = tmp_path / "lt_normal.ass"
+    write_lower_third_ass(lt_ass_norm, cues, config=SeriesCompileConfig(subtitle_mode="srt_only", watermark_position="top_left"))
+    subs_lt_norm = SSAFile.load(str(lt_ass_norm), encoding="utf-8")
+    assert subs_lt_norm.styles["YTSeriesLowerThird"].alignment == Alignment.BOTTOM_LEFT
+    assert subs_lt_norm.styles["YTSeriesLowerThird"].marginv == LOWER_THIRD_MARGIN_V_DEFAULT
+    assert len(subs_lt_norm.events) == 2
+    assert r"\fad(350,400)" in subs_lt_norm.events[0].text
+    assert "THÁNG 11/1953 · MƯỜNG THANH" in subs_lt_norm.events[0].text
+
+    lt_ass_raised = tmp_path / "lt_raised.ass"
+    write_lower_third_ass(lt_ass_raised, cues, config=SeriesCompileConfig(subtitle_mode="burn_and_srt"))
+    subs_lt_raised = SSAFile.load(str(lt_ass_raised), encoding="utf-8")
+    assert subs_lt_raised.styles["YTSeriesLowerThird"].marginv == LOWER_THIRD_MARGIN_V_RAISED
+
+    # 3. Bộ lọc Hạt phim 35mm sống & Tối góc nhẹ (Film Grain / Vignette)
+    land_img = _make_solid_image(tmp_path / "fg_land.png", (1920, 1080), (50, 70, 90))
+    port_img = _make_solid_image(tmp_path / "fg_port.png", (720, 1280), (90, 70, 50))
+
+    vf_grain_on = build_youtube_16x9_scene_vf(
+        land_img, duration=1.5, layout_mode="smart", is_archival=True, enable_film_grain_vignette=True
+    )
+    assert FILM_GRAIN_VIGNETTE_VF in vf_grain_on
+    assert "noise=alls=4:allf=t+u" in vf_grain_on and "vignette=PI/6.5" in vf_grain_on
+
+    vf_grain_off = build_youtube_16x9_scene_vf(
+        land_img, duration=1.5, layout_mode="smart", is_archival=True, enable_film_grain_vignette=False
+    )
+    assert "noise=alls=4:allf=t+u" not in vf_grain_off and "vignette=PI/6.5" not in vf_grain_off
+
+    vf_port_grain_on = build_youtube_16x9_scene_vf(
+        port_img, duration=1.5, layout_mode="smart", is_archival=True, enable_film_grain_vignette=True
+    )
+    assert FILM_GRAIN_VIGNETTE_VF in vf_port_grain_on
+
+    # 4. E2E compile kiểm tra lọc bỏ on_screen_text của cảnh CTA bị cắt & ghi cấu hình vào compliance_report.json
+    series_dir = tmp_path / "DocGraphics_Series"
+    ep1 = series_dir / "Tap_01"
+    _make_solid_image(ep1 / "assets_16x9" / "001.png", (1920, 1080), (45, 75, 105))
+    _make_solid_image(ep1 / "assets_16x9" / "002.png", (1920, 1080), (65, 85, 55))
+    ep1_speeches = [
+        "Ngày 13 tháng 3 năm 1954 mở màn chiến dịch.",
+        "Đón xem tập sau và đăng ký kênh!",
+    ]
+    (ep1 / "storyboard.json").write_text(
+        json.dumps(
+            {
+                "version": "2.0",
+                "title": "Tap_01_Mo_Man",
+                "chapter_title": "Trận mở màn Him Lam",
+                "scenes": [
+                    {
+                        "id": 1,
+                        "speech": ep1_speeches[0],
+                        "motion": "zoom_in",
+                        "on_screen_text": "13/03/1954 · CỤM CỨ ĐIỂM HIM LAM",
+                    },
+                    {
+                        "id": 2,
+                        "speech": ep1_speeches[1],
+                        "motion": "static",
+                        "on_screen_text": "CTA PHẢI BỊ BỎ QUA",
+                        "is_cta": True,
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    _synthesize_full_audio_and_alignment(
+        ep1_speeches,
+        ep1 / "assets" / "full_audio.wav",
+        ep1 / "assets" / "alignment.json",
+        tmp_path,
+    )
+
+    ep2 = series_dir / "Tap_02"
+    _make_solid_image(ep2 / "assets_16x9" / "001.png", (1920, 1080), (80, 60, 40))
+    _make_storyboard(ep2, "Tap_02_Ket", [{"id": 1, "speech": "Tập hai kết thúc.", "motion": "static"}])
+
+    eps = scan_series_folder(series_dir)
+    eps[1].enabled = False  # Chỉ render Tập 1 (nhưng vẫn giữ suggested_skip_scenes=[2] từ bước quét 2 tập)
+
+    cfg = SeriesCompileConfig(
+        series_name="Doc_Test",
+        output_dir=tmp_path / "doc_out",
+        subtitle_mode="none",
+        watermark_text="Sử Việt 16:9",
+        watermark_enabled=True,
+        watermark_position="top_right",
+        show_lower_third=True,
+        show_chapter_badge=True,
+        enable_film_grain_vignette=True,
+        include_chapter_cards=True,
+        chapter_card_duration=1.0,
+        include_end_credits=False,
+        loudnorm_youtube=False,
+        crf=24,
+        preset="ultrafast",
+        work_root=tmp_path / "work_doc",
+    )
+    res = compile_series_youtube(series_dir, cfg, episodes=eps)
+    assert res.video_path.is_file()
+    ch1 = res.chapters[0]
+    assert ch1.skipped_scenes == [2]
+    assert len(ch1.lower_thirds) == 1
+    assert ch1.lower_thirds[0][2] == "13/03/1954 · CỤM CỨ ĐIỂM HIM LAM"
+    assert ch1.lower_thirds[0][0] >= ch1.episode_start_sec - 0.05
+
+    comp = json.loads(res.report_path.read_text(encoding="utf-8"))
+    assert comp["settings"]["show_lower_third"] is True
+    assert comp["settings"]["show_chapter_badge"] is True
+    assert comp["settings"]["enable_film_grain_vignette"] is True
+
+

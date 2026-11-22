@@ -13,6 +13,10 @@ from core.series_compiler import (
     DEFAULT_SPEED_FACTOR,
     MAX_SPEED_FACTOR,
     MIN_SPEED_FACTOR,
+    WATERMARK_OPACITY_MAX,
+    WATERMARK_OPACITY_MIN,
+    XFADE_DURATION_MAX,
+    XFADE_DURATION_MIN,
     EpisodeEntry,
     LicenseAuditReport,
     SeriesCompileConfig,
@@ -40,8 +44,9 @@ LAYOUT_MODES: Dict[str, str] = {
 }
 
 SUBTITLE_MODES: Dict[str, str] = {
-    "srt_only": "Chỉ xuất file .srt rời (Khuyên dùng YouTube)",
-    "burn_and_srt": "Đốt phụ đề đáy màn hình + xuất .srt",
+    "none": "Không dùng phụ đề",
+    "srt_only": "Chỉ xuất file .srt rời",
+    "burn_and_srt": "Đốt phụ đề + xuất .srt",
 }
 
 ANTI_AI_YT_LEVELS: Dict[str, str] = {
@@ -49,6 +54,24 @@ ANTI_AI_YT_LEVELS: Dict[str, str] = {
     "light": "Nhẹ",
     "medium": "Vừa",
     "strong": "Mạnh",
+}
+
+WATERMARK_POSITIONS: Dict[str, str] = {
+    "top_left": "Góc trái trên",
+    "top_right": "Góc phải trên",
+    "bottom_left": "Góc trái dưới",
+    "bottom_right": "Góc phải dưới",
+}
+
+XFADE_TRANSITIONS: Dict[str, str] = {
+    "fade": "Mờ chồng mượt (fade)",
+    "fadeblack": "Chuyển qua đen (fadeblack)",
+    "none": "Cắt cứng (none)",
+}
+
+VIDEO_CODECS: Dict[str, str] = {
+    "h264": "H.264 (Tương thích mọi thiết bị)",
+    "h265": "H.265 / HEVC (File gọn hơn)",
 }
 
 
@@ -105,6 +128,19 @@ class SeriesYouTubeTab(ttk.Frame):
         self.subtitle_mode_choice = tk.StringVar(value=_label(SUBTITLE_MODES, "srt_only"))
         self.speed_factor = tk.DoubleVar(value=DEFAULT_SPEED_FACTOR)
         self.anti_ai_choice = tk.StringVar(value=_label(ANTI_AI_YT_LEVELS, "medium"))
+
+        self.xfade_transition_choice = tk.StringVar(value=_label(XFADE_TRANSITIONS, "fade"))
+        self.xfade_duration = tk.DoubleVar(value=0.30)
+        self.smart_clip_fit = tk.BooleanVar(value=True)
+        self.video_codec_choice = tk.StringVar(value=_label(VIDEO_CODECS, "h264"))
+
+        self.watermark_enabled = tk.BooleanVar(value=True)
+        self.watermark_position_choice = tk.StringVar(value=_label(WATERMARK_POSITIONS, "top_left"))
+        self.watermark_opacity = tk.DoubleVar(value=0.40)
+
+        self.show_lower_third = tk.BooleanVar(value=True)
+        self.show_chapter_badge = tk.BooleanVar(value=True)
+        self.enable_film_grain_vignette = tk.BooleanVar(value=True)
 
         self.prefer_assets_16x9 = tk.BooleanVar(value=True)
         self.auto_skip_mid_cta = tk.BooleanVar(value=True)
@@ -187,7 +223,59 @@ class SeriesYouTubeTab(ttk.Frame):
             wraplength=390,
         ).pack(anchor="w", pady=(4, 0))
 
-        # 2. Tùy chọn biên tập & Chính sách YouTube
+        # 2. Nhịp chuyển cảnh & Mã hóa Video
+        box_trans = ttk.LabelFrame(body, text="Nhịp chuyển cảnh & Mã hóa", style="Card.TLabelframe", padding=10)
+        box_trans.pack(fill="x", pady=(0, 8))
+
+        self.cb_xfade = row(
+            box_trans,
+            "Chuyển cảnh xfade",
+            lambda p: ttk.Combobox(
+                p, textvariable=self.xfade_transition_choice, values=list(XFADE_TRANSITIONS.values()), state="readonly"
+            ),
+            label_width=15,
+        )
+        LabeledScale(
+            box_trans,
+            "Thời lượng chuyển",
+            self.xfade_duration,
+            XFADE_DURATION_MIN,
+            XFADE_DURATION_MAX,
+            "{:.2f}s",
+            label_width=15,
+        ).pack(fill="x", pady=2)
+        ttk.Checkbutton(
+            box_trans,
+            text="Smart Clip Fit (tự kéo giãn mượt clip .mp4 khớp câu thoại, tránh lặp giật)",
+            variable=self.smart_clip_fit,
+            style="Card.TCheckbutton",
+        ).pack(anchor="w", pady=(2, 4))
+        self.cb_video_codec = row(
+            box_trans,
+            "Định dạng nén",
+            lambda p: ttk.Combobox(
+                p, textvariable=self.video_codec_choice, values=list(VIDEO_CODECS.values()), state="readonly"
+            ),
+            label_width=15,
+        )
+
+        # 3. Đồ họa Phim Tài Liệu
+        box_doc = ttk.LabelFrame(body, text="Đồ họa Phim Tài Liệu", style="Card.TLabelframe", padding=10)
+        box_doc.pack(fill="x", pady=(0, 8))
+
+        for var, text in (
+            (self.show_lower_third, "Hiện thanh Lower-Third mốc lịch sử (on_screen_text trong JSON)"),
+            (self.show_chapter_badge, "Hiện nhãn Chương siêu mảnh góc trên (CHƯƠNG I · ...)"),
+            (self.enable_film_grain_vignette, "Thêm hạt phim 35mm sống & tối góc nhẹ (Film Grain / Vignette)"),
+        ):
+            ttk.Checkbutton(
+                box_doc,
+                text=text,
+                variable=var,
+                style="Card.TCheckbutton",
+            ).pack(anchor="w", pady=2)
+
+        # 4. Tùy chọn biên tập & Chính sách YouTube
         box_opt = ttk.LabelFrame(body, text="Tùy chọn biên tập & Chính sách", style="Card.TLabelframe", padding=10)
         box_opt.pack(fill="x", pady=(0, 8))
 
@@ -205,8 +293,8 @@ class SeriesYouTubeTab(ttk.Frame):
                 style="Card.TCheckbutton",
             ).pack(anchor="w", pady=2)
 
-        # 3. Âm thanh & Đầu ra
-        box_aud = ttk.LabelFrame(body, text="Âm thanh & Đầu ra", style="Card.TLabelframe", padding=10)
+        # 4. Âm thanh, Watermark & Đầu ra
+        box_aud = ttk.LabelFrame(body, text="Âm thanh, Watermark & Đầu ra", style="Card.TLabelframe", padding=10)
         box_aud.pack(fill="x", pady=(0, 6))
 
         FileRow(
@@ -227,12 +315,35 @@ class SeriesYouTubeTab(ttk.Frame):
         LabeledScale(box_aud, "Âm lượng SFX", self.sfx_volume, 0.0, 1.50, "{:.0%}", label_width=15).pack(
             fill="x", pady=2
         )
+        ttk.Checkbutton(
+            box_aud,
+            text="Hiển thị Watermark tên kênh trên video 16:9",
+            variable=self.watermark_enabled,
+            style="Card.TCheckbutton",
+        ).pack(anchor="w", pady=(4, 2))
         self.ent_channel = row(
             box_aud,
             "Kênh / Watermark",
             lambda p: ttk.Entry(p, textvariable=self.channel_name),
             label_width=15,
         )
+        self.cb_wm_pos = row(
+            box_aud,
+            "Vị trí đặt chữ",
+            lambda p: ttk.Combobox(
+                p, textvariable=self.watermark_position_choice, values=list(WATERMARK_POSITIONS.values()), state="readonly"
+            ),
+            label_width=15,
+        )
+        LabeledScale(
+            box_aud,
+            "Độ rõ Watermark",
+            self.watermark_opacity,
+            WATERMARK_OPACITY_MIN,
+            WATERMARK_OPACITY_MAX,
+            "{:.0%}",
+            label_width=15,
+        ).pack(fill="x", pady=2)
         FileRow(box_aud, "Thư mục xuất", self.output_dir, mode="dir", label_width=15).pack(fill="x", pady=(4, 2))
         ttk.Label(
             box_aud,
@@ -691,6 +802,11 @@ class SeriesYouTubeTab(ttk.Frame):
         spd = round(max(MIN_SPEED_FACTOR, min(MAX_SPEED_FACTOR, float(self.speed_factor.get()))), 2)
         bgm_vol = round(max(0.0, min(1.0, float(self.bgm_volume.get()))), 2)
         sfx_vol = round(max(0.0, min(1.5, float(self.sfx_volume.get()))), 2)
+        wm_enabled = bool(self.watermark_enabled.get())
+        wm_pos = _key(WATERMARK_POSITIONS, self.watermark_position_choice.get())
+        wm_opacity = round(max(WATERMARK_OPACITY_MIN, min(WATERMARK_OPACITY_MAX, float(self.watermark_opacity.get()))), 2)
+        xfade_trans = _key(XFADE_TRANSITIONS, self.xfade_transition_choice.get())
+        xfade_dur = round(max(XFADE_DURATION_MIN, min(XFADE_DURATION_MAX, float(self.xfade_duration.get()))), 2)
         ch_name = self.channel_name.get().strip()
         out_raw = self.output_dir.get().strip()
         bgm_raw = self.bgm_path.get().strip()
@@ -711,7 +827,17 @@ class SeriesYouTubeTab(ttk.Frame):
             sfx_volume=sfx_vol,
             loudnorm_youtube=bool(self.loudnorm_youtube.get()),
             channel_name=ch_name,
-            watermark_text=ch_name or None,
+            watermark_text=(ch_name if (wm_enabled and ch_name) else None),
+            watermark_enabled=wm_enabled,
+            watermark_position=wm_pos,
+            watermark_opacity=wm_opacity,
+            xfade_transition=xfade_trans,
+            xfade_duration=xfade_dur,
+            smart_clip_fit=bool(self.smart_clip_fit.get()),
+            video_codec=_key(VIDEO_CODECS, self.video_codec_choice.get()),
+            show_lower_third=bool(self.show_lower_third.get()),
+            show_chapter_badge=bool(self.show_chapter_badge.get()),
+            enable_film_grain_vignette=bool(self.enable_film_grain_vignette.get()),
         )
         return episodes, cfg
 
@@ -784,7 +910,10 @@ class SeriesYouTubeTab(ttk.Frame):
         )
         self.log.write(f"📦 Thư mục xuất: {result.video_path.parent}", "ok")
         self.log.write(f"   • Video 16:9: {result.video_path.name}", "info")
-        self.log.write(f"   • Phụ đề SRT: {result.srt_path.name}", "info")
+        if result.srt_path:
+            self.log.write(f"   • Phụ đề SRT: {result.srt_path.name}", "info")
+        else:
+            self.log.write("   • Phụ đề SRT: (Không dùng phụ đề)", "info")
         self.log.write(f"   • Mô tả Chapters: {result.description_path.name}", "info")
         self.log.write(f"   • Báo cáo bản quyền: {result.report_path.name}", "info")
 

@@ -70,7 +70,33 @@ YT_AUDIO_SR = 48000
 
 SMART_LANDSCAPE_RATIO = 1.45
 VALID_LAYOUT_MODES: Tuple[str, ...] = ("smart", "pillarbox", "full_bleed")
-VALID_SUBTITLE_MODES: Tuple[str, ...] = ("srt_only", "burn_and_srt")
+VALID_SUBTITLE_MODES: Tuple[str, ...] = ("none", "srt_only", "burn_and_srt")
+VALID_WATERMARK_POSITIONS: Tuple[str, ...] = ("top_left", "top_right", "bottom_left", "bottom_right")
+VALID_XFADE_TRANSITIONS: Tuple[str, ...] = ("fade", "fadeblack", "none")
+VALID_VIDEO_CODECS: Tuple[str, ...] = ("h264", "h265")
+
+WATERMARK_OPACITY_MIN = 0.10
+WATERMARK_OPACITY_MAX = 1.00
+XFADE_DURATION_MIN = 0.15
+XFADE_DURATION_MAX = 0.80
+SMART_CLIP_FIT_MAX_RATIO = 1.45  # Kéo giãn tối đa +45% thời lượng clip gốc (giống Story Studio)
+
+# Lề an toàn Watermark & Đồ họa tài liệu trên khung 1920x1080 (PlayRes 1920x1080)
+WM_MARGIN_SIDE = 60
+WM_MARGIN_VERTICAL = 48
+WM_FONT_SIZE = 38
+
+LOWER_THIRD_FONT_SIZE = 36
+LOWER_THIRD_MARGIN_L = 68
+LOWER_THIRD_MARGIN_R = 120
+LOWER_THIRD_MARGIN_V_DEFAULT = 84
+LOWER_THIRD_MARGIN_V_RAISED = 175
+LOWER_THIRD_ACCENT_HEX_BGR = "&H41A4D9&"  # Vàng đồng #D9A441 theo thứ tự BGR của ASS
+
+CHAPTER_BADGE_FONT_SIZE = 24
+CHAPTER_BADGE_OPACITY = 0.70
+
+FILM_GRAIN_VIGNETTE_VF = "noise=alls=4:allf=t+u,vignette=PI/6.5"
 
 MIN_SPEED_FACTOR = 1.00
 MAX_SPEED_FACTOR = 1.25
@@ -200,6 +226,7 @@ class ArchiveSourceItem:
     license: str
     source_url: str
     provider: str = ""
+    publisher: str = ""
     year_or_date: str = ""
     sha256: str = ""
     note: str = ""
@@ -213,8 +240,9 @@ class ArchiveSourceItem:
         if "." in clean_title and len(clean_title.rsplit(".", 1)[-1]) <= 4:
             clean_title = clean_title.rsplit(".", 1)[0]
         parts = [clean_title]
-        if self.author:
-            parts.append(f"Tác giả/Nguồn: {self.author}")
+        owner = self.author or self.publisher
+        if owner:
+            parts.append(f"Tác giả/Nguồn: {owner}")
         if self.license:
             parts.append(f"Giấy phép: {self.license}")
         line = " — ".join(parts)
@@ -226,6 +254,7 @@ class ArchiveSourceItem:
         return {
             "title": self.title,
             "author": self.author,
+            "publisher": self.publisher,
             "license": self.license,
             "source_url": self.source_url,
             "provider": self.provider,
@@ -243,6 +272,7 @@ class LicenseAuditReport:
     """Kết quả kiểm tra và phân nhóm bản quyền toàn series."""
 
     cc_attribution_required: List[ArchiveSourceItem] = field(default_factory=list)
+    editorial_credit_required: List[ArchiveSourceItem] = field(default_factory=list)
     public_domain: List[ArchiveSourceItem] = field(default_factory=list)
     risky_warnings: List[ArchiveSourceItem] = field(default_factory=list)
     other_sources: List[ArchiveSourceItem] = field(default_factory=list)
@@ -254,7 +284,12 @@ class LicenseAuditReport:
         return len(self.risky_warnings) > 0
 
     def all_safe_credits(self) -> List[ArchiveSourceItem]:
-        return [*self.cc_attribution_required, *self.public_domain, *self.other_sources]
+        return [
+            *self.cc_attribution_required,
+            *self.editorial_credit_required,
+            *self.public_domain,
+            *self.other_sources,
+        ]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -263,11 +298,13 @@ class LicenseAuditReport:
             "has_risky_warnings": self.has_risky_warnings,
             "counts": {
                 "cc_attribution_required": len(self.cc_attribution_required),
+                "editorial_credit_required": len(self.editorial_credit_required),
                 "public_domain": len(self.public_domain),
                 "risky_warnings": len(self.risky_warnings),
                 "other_sources": len(self.other_sources),
             },
             "cc_attribution_required": [i.to_dict() for i in self.cc_attribution_required],
+            "editorial_credit_required": [i.to_dict() for i in self.editorial_credit_required],
             "public_domain": [i.to_dict() for i in self.public_domain],
             "risky_warnings": [i.to_dict() for i in self.risky_warnings],
             "other_sources": [i.to_dict() for i in self.other_sources],
@@ -291,6 +328,7 @@ class ChapterMarker:
     audio_source: str = "tts_per_scene"
     native_16x9_scenes: List[int] = field(default_factory=list)
     fallback_assets_scenes: List[int] = field(default_factory=list)
+    lower_thirds: List[Tuple[float, float, str]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -327,8 +365,16 @@ class SeriesCompileConfig:
     sub_font_size: int = 52
     sub_color: str = "#FFE000"
     watermark_text: Optional[str] = None
-    watermark_pos: str = "top_left"
-    watermark_opacity: int = 65
+    watermark_enabled: bool = True
+    watermark_position: str = "top_left"      # top_left | top_right | bottom_left | bottom_right
+    watermark_opacity: float = 0.40           # 0.10–1.00 (10%–100%)
+    xfade_transition: str = "fade"            # fade | fadeblack | none
+    xfade_duration: float = 0.30              # 0.15–0.80 giây (bỏ qua khi xfade_transition == "none")
+    smart_clip_fit: bool = True               # kéo giãn mượt clip .mp4 cho khớp câu thoại thay vì lặp giật
+    video_codec: str = "h264"                 # h264 (tương thích) | h265 (file gọn hơn)
+    show_lower_third: bool = True             # hiện thanh Lower-Third mốc lịch sử từ on_screen_text
+    show_chapter_badge: bool = True           # hiện nhãn Chương siêu mảnh góc trên (CHƯƠNG I · ...)
+    enable_film_grain_vignette: bool = True   # thêm hạt phim 35mm sống & tối góc nhẹ (noise + vignette)
     speed_factor: float = DEFAULT_SPEED_FACTOR
     anti_ai_level: Union[str, bool, None] = "light"
     auto_skip_mid_cta: bool = True
@@ -358,7 +404,7 @@ class SeriesCompileResult:
     """Kết quả trọn bộ 4 file xuất bản YouTube và thông số kiểm tra."""
 
     video_path: Path
-    srt_path: Path
+    srt_path: Optional[Path]
     description_path: Path
     report_path: Path
     chapters: List[ChapterMarker]
@@ -372,7 +418,7 @@ class SeriesCompileResult:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "video_path": str(self.video_path),
-            "srt_path": str(self.srt_path),
+            "srt_path": str(self.srt_path) if self.srt_path else None,
             "description_path": str(self.description_path),
             "report_path": str(self.report_path),
             "total_duration_sec": round(self.total_duration_sec, 3),
@@ -655,9 +701,55 @@ def _detect_license_risks(raw: Dict[str, Any]) -> List[str]:
     return reasons
 
 
-def _classify_safe_license(license_str: str) -> str:
+_VN_PRESS_PUBLISHER_LABELS: Dict[str, str] = {
+    "qdnd.vn": "Báo Quân đội nhân dân (qdnd.vn)",
+    "baotanglichsu.vn": "Bảo tàng Lịch sử Quốc gia (baotanglichsu.vn)",
+    "btlsqsvn.org.vn": "Bảo tàng Lịch sử Quân sự Việt Nam (btlsqsvn.org.vn)",
+    "vnanet.vn": "Thông tấn xã Việt Nam (vnanet.vn)",
+    "nhandan.vn": "Báo Nhân Dân (nhandan.vn)",
+    "vietnamplus.vn": "VietnamPlus - TTXVN (vietnamplus.vn)",
+    "baochinhphu.vn": "Báo Điện tử Chính phủ (baochinhphu.vn)",
+    "cand.com.vn": "Báo Công an nhân dân (cand.com.vn)",
+}
+
+
+def format_editorial_press_summary_line(items: Sequence[ArchiveSourceItem]) -> str:
+    """Tạo dòng ghi nguồn báo chí/bảo tàng tổng hợp (vd: 'Ảnh tư liệu tổng hợp từ Báo Quân đội nhân dân (qdnd.vn), ...')."""
+    if not items:
+        return ""
+    publishers: List[str] = []
+    seen: set[str] = set()
+    for it in items:
+        cand = (it.publisher or it.author or "").strip()
+        url_low = (it.source_url or "").lower()
+        for dom, label in _VN_PRESS_PUBLISHER_LABELS.items():
+            if dom in url_low or dom in cand.lower():
+                cand = label
+                break
+        if not cand and url_low:
+            m_host = re.search(r"https?://(?:www\.)?([^/]+)", url_low)
+            if m_host:
+                cand = m_host.group(1)
+        if cand and cand.lower() not in ("unknown", "vn_press", "manual_archive"):
+            key = cand.lower()
+            if key not in seen:
+                seen.add(key)
+                publishers.append(cand)
+    if not publishers:
+        return "Ảnh tư liệu tổng hợp từ các cơ quan báo chí và bảo tàng lịch sử Việt Nam."
+    return f"Ảnh tư liệu tổng hợp từ {', '.join(publishers)}."
+
+
+def _classify_safe_license(license_str: str, provider: str = "") -> str:
     """Phân loại giấy phép không có cờ rủi ro sang nhóm tương ứng."""
     lic = (license_str or "").strip().lower()
+    prov = (provider or "").strip().lower()
+    if (
+        "editorial" in lic
+        or "press archive" in lic
+        or prov == "vn_press"
+    ):
+        return "editorial_credit_required"
     if (
         "public domain" in lic
         or "cc0" in lic
@@ -696,7 +788,8 @@ def audit_series_licenses(
             raw_url = str(rec.get("source_url") or rec.get("url") or "").strip()
             norm_url = raw_url.lower().rstrip("/")
             title = str(rec.get("title") or rec.get("asset_file") or f"Scene {scene_key}").strip()
-            author = str(rec.get("author") or "").strip()
+            publisher = str(rec.get("publisher") or "").strip()
+            author = str(rec.get("author") or publisher or "").strip()
             lic = str(rec.get("license") or "").strip()
             provider = str(rec.get("provider") or "").strip()
             year_or_date = str(rec.get("year_or_date") or rec.get("year") or rec.get("date") or "").strip()
@@ -722,6 +815,8 @@ def audit_series_licenses(
                     item.source_url = raw_url
                 if not item.author and author:
                     item.author = author
+                if not item.publisher and publisher:
+                    item.publisher = publisher
                 if not item.license and lic:
                     item.license = lic
                 if not item.provider and provider:
@@ -739,6 +834,7 @@ def audit_series_licenses(
                 item = ArchiveSourceItem(
                     title=title,
                     author=author,
+                    publisher=publisher,
                     license=lic,
                     source_url=raw_url,
                     provider=provider,
@@ -767,9 +863,11 @@ def audit_series_licenses(
         if item.risk_reasons:
             report.risky_warnings.append(item)
         else:
-            bucket = _classify_safe_license(item.license)
+            bucket = _classify_safe_license(item.license, item.provider)
             if bucket == "cc_attribution_required":
                 report.cc_attribution_required.append(item)
+            elif bucket == "editorial_credit_required":
+                report.editorial_credit_required.append(item)
             elif bucket == "public_domain":
                 report.public_domain.append(item)
             else:
@@ -893,6 +991,7 @@ def build_youtube_16x9_scene_vf(
     is_video: Optional[bool] = None,
     is_archival: bool = False,
     anti_ai_level: Union[str, bool, None] = "off",
+    enable_film_grain_vignette: bool = False,
     src_size: Optional[Tuple[int, int]] = None,
     fps: int = YT_FPS,
     out_w: int = YT_WIDTH,
@@ -904,6 +1003,7 @@ def build_youtube_16x9_scene_vf(
     - `pillarbox`: luôn dùng khung tài liệu nền mờ cho ảnh không đúng 16:9.
     - `full_bleed`: luôn phủ kín `1920x1080`, ưu tiên giữ headroom (`0.30`).
     - `is_archival=True`: miễn 100% lọc khử bóng Anti-AI để bảo toàn ảnh tư liệu lịch sử thật.
+    - `enable_film_grain_vignette=True`: thêm hạt phim 35mm sống (`noise=alls=4:allf=t+u`) & tối góc nhẹ (`vignette=PI/6.5`).
     """
     if src_size is not None:
         src_w, src_h = max(2, int(src_size[0])), max(2, int(src_size[1]))
@@ -935,6 +1035,8 @@ def build_youtube_16x9_scene_vf(
             depolish = build_ai_scene_depolish_vf(lv, width=out_w, height=out_h)
             if depolish:
                 parts.append(depolish)
+        if enable_film_grain_vignette:
+            parts.append(FILM_GRAIN_VIGNETTE_VF)
         parts.append("format=yuv420p")
         return ",".join(parts)
 
@@ -964,12 +1066,13 @@ def build_youtube_16x9_scene_vf(
     pad_h = fg_h + 2 * border_px
     fg_steps.append(f"pad={pad_w}:{pad_h}:{border_px}:{border_px}:color=0x141414")
     fg_chain = f"[fg]{','.join(fg_steps)}[fg_out]"
+    tail_vf = f",{FILM_GRAIN_VIGNETTE_VF},format=yuv420p" if enable_film_grain_vignette else ",format=yuv420p"
 
     return (
         f"split=2[bg][fg];"
         f"{bg_chain};"
         f"{fg_chain};"
-        f"[bg_out][fg_out]overlay=(W-w)/2:(H-h)/2:shortest=1,setsar=1,format=yuv420p"
+        f"[bg_out][fg_out]overlay=(W-w)/2:(H-h)/2:shortest=1,setsar=1{tail_vf}"
     )
 
 
@@ -1597,10 +1700,22 @@ def render_end_credits_image(
     draw.line([(cx - 220, y), (cx + 220, y)], fill=gold, width=2)
     y += 30
 
-    # Ưu tiên hiển thị nguồn cần ghi công CC BY / CC BY-SA trước, rồi Public Domain
-    ordered_items = [*license_report.cc_attribution_required, *license_report.public_domain]
+    # Ưu tiên hiển thị nguồn cần ghi công CC BY / CC BY-SA & Báo chí/Bảo tàng trước, rồi Public Domain
+    ordered_items = [
+        *license_report.cc_attribution_required,
+        *license_report.editorial_credit_required,
+        *license_report.public_domain,
+    ]
     shown = ordered_items[:max(1, int(max_items))]
     overflow = max(0, len(ordered_items) - len(shown))
+
+    if license_report.editorial_credit_required:
+        press_summary = format_editorial_press_summary_line(license_report.editorial_credit_required)
+        if press_summary:
+            wrapped_press = _wrap_text_pil(draw, press_summary, font_item, width - 200, max_lines=2)
+            for pln in wrapped_press:
+                y = _draw_centered_text(draw, pln, y, font_item, ivory, width) + 10
+            y += 6
 
     if not shown:
         _draw_centered_text(
@@ -1746,6 +1861,15 @@ def build_youtube_description(
         for item in license_report.cc_attribution_required:
             lines.append(f"- {item.credit_line()}")
 
+    if license_report.editorial_credit_required:
+        lines.append("")
+        lines.append("NGUỒN TƯ LIỆU BÁO CHÍ & BẢO TÀNG (EDITORIAL / PRESS ARCHIVE):")
+        press_summary = format_editorial_press_summary_line(license_report.editorial_credit_required)
+        if press_summary:
+            lines.append(press_summary)
+        for item in license_report.editorial_credit_required:
+            lines.append(f"- {item.credit_line()}")
+
     if license_report.public_domain:
         lines.append("")
         lines.append("NGUỒN TƯ LIỆU PHẠM VI CÔNG CỘNG (PUBLIC DOMAIN):")
@@ -1783,8 +1907,14 @@ def _render_scene_video_16x9(
     anti_ai_level: Union[str, bool, None],
     crf: int,
     preset: str,
+    smart_clip_fit: bool = True,
+    enable_film_grain_vignette: bool = False,
 ) -> Path:
-    """Render một cảnh (ảnh tĩnh hoặc video clip) ra clip MKV chuẩn 1920x1080 @ 30fps (không audio)."""
+    """Render một cảnh (ảnh tĩnh hoặc video clip) ra clip MKV chuẩn 1920x1080 @ 30fps (không audio).
+
+    `smart_clip_fit=True`: clip gốc ngắn hơn câu thoại không quá +45% sẽ được kéo giãn mượt bằng
+    `setpts` (cùng ngưỡng Smart Clip Fit của Story Studio) thay vì lặp lại từ đầu gây giật hình.
+    """
     dur = max(0.15, float(duration))
     src_size = probe_media_dimensions(asset_file)
     vf = build_youtube_16x9_scene_vf(
@@ -1795,6 +1925,7 @@ def _render_scene_video_16x9(
         is_video=is_video,
         is_archival=is_archival,
         anti_ai_level=anti_ai_level,
+        enable_film_grain_vignette=enable_film_grain_vignette,
         src_size=src_size,
         fps=YT_FPS,
         out_w=YT_WIDTH,
@@ -1804,12 +1935,13 @@ def _render_scene_video_16x9(
     out_clip.parent.mkdir(parents=True, exist_ok=True)
     if is_video:
         stretch_prefix = ""
-        try:
-            src_dur = probe(asset_file).duration
-            if src_dur > 0.2 and src_dur < dur and (dur / src_dur) <= 1.45:
-                stretch_prefix = f"setpts={(dur / src_dur):.5f}*PTS,"
-        except Exception:
-            pass
+        if smart_clip_fit:
+            try:
+                src_dur = probe(asset_file).duration
+                if src_dur > 0.2 and src_dur < dur and (dur / src_dur) <= SMART_CLIP_FIT_MAX_RATIO:
+                    stretch_prefix = f"setpts={(dur / src_dur):.5f}*PTS,"
+            except Exception:
+                pass
 
         if stretch_prefix:
             cmd = [
@@ -1847,6 +1979,341 @@ def _render_scene_video_16x9(
     if res.returncode != 0:
         raise DubberError(f"Render cảnh 16:9 '{asset_file.name}' thất bại:\n{res.stderr.strip()[-800:]}")
     return out_clip
+
+
+def normalize_watermark_position(position: Optional[str]) -> str:
+    """Chuẩn hóa vị trí Watermark về 1 trong 4 góc an toàn (mặc định `top_left`)."""
+    pos = str(position or "").strip().lower()
+    return pos if pos in VALID_WATERMARK_POSITIONS else "top_left"
+
+
+def normalize_watermark_opacity(opacity: Union[float, int, None]) -> float:
+    """Chuẩn hóa độ rõ Watermark về dải 0.10–1.00 (tự hiểu giá trị kiểu phần trăm cũ như `65` → 0.65)."""
+    try:
+        val = float(opacity if opacity is not None else 0.40)
+    except (TypeError, ValueError):
+        val = 0.40
+    if val >= 10.0:
+        val = val / 100.0
+    return round(max(WATERMARK_OPACITY_MIN, min(WATERMARK_OPACITY_MAX, val)), 3)
+
+
+def normalize_xfade_settings(transition: Optional[str], duration: Union[float, int, None]) -> Tuple[str, float]:
+    """Chuẩn hóa kiểu chuyển cảnh xfade & thời lượng (0.15–0.80s; trả 0.0 khi `none`)."""
+    trans = str(transition or "").strip().lower()
+    if trans not in VALID_XFADE_TRANSITIONS:
+        trans = "fade"
+    if trans == "none":
+        return "none", 0.0
+    try:
+        dur = float(duration if duration is not None else 0.30)
+    except (TypeError, ValueError):
+        dur = 0.30
+    return trans, round(max(XFADE_DURATION_MIN, min(XFADE_DURATION_MAX, dur)), 3)
+
+
+def resolve_effective_watermark_text(config: "SeriesCompileConfig") -> Optional[str]:
+    """Trả về chữ Watermark thực vẽ (chỉ khi checkbox bật và tên kênh không rỗng)."""
+    if not bool(getattr(config, "watermark_enabled", True)):
+        return None
+    text = (config.watermark_text or "").strip()
+    return text or None
+
+
+def build_final_video_encode_args(config: "SeriesCompileConfig") -> List[str]:
+    """Tham số mã hóa video thành phẩm theo `video_codec` (`h264` mặc định | `h265` gọn hơn)."""
+    codec = str(getattr(config, "video_codec", "h264") or "h264").strip().lower()
+    if codec not in VALID_VIDEO_CODECS:
+        raise DubberError(f"video_codec '{codec}' không hợp lệ (chấp nhận: {VALID_VIDEO_CODECS}).")
+    if codec == "h265":
+        return [
+            "-r", str(YT_FPS),
+            "-c:v", "libx265",
+            "-preset", config.preset,
+            "-crf", str(int(config.crf)),
+            "-pix_fmt", "yuv420p",
+            "-tag:v", "hvc1",
+            "-x265-params", "log-level=error",
+        ]
+    return [
+        "-r", str(YT_FPS),
+        "-c:v", "libx264",
+        "-profile:v", "high",
+        "-preset", config.preset,
+        "-crf", str(int(config.crf)),
+        "-pix_fmt", "yuv420p",
+    ]
+
+
+def write_watermark_ass(
+    ass_path: Path,
+    text: str,
+    *,
+    position: str = "top_left",
+    opacity: float = 0.40,
+    total_duration: float,
+    font_name: str = "Arial",
+    font_size: int = WM_FONT_SIZE,
+) -> Path:
+    """Chèn (hoặc tạo mới) lớp Watermark tên kênh vào file ASS khung 1920x1080 tại 4 góc an toàn."""
+    from pysubs2 import Alignment, Color, SSAEvent, SSAFile, SSAStyle
+
+    subs = SSAFile.load(str(ass_path), encoding="utf-8") if ass_path.is_file() else SSAFile()
+    play_x = int(float(subs.info.get("PlayResX", 0) or 0)) or YT_WIDTH
+    play_y = int(float(subs.info.get("PlayResY", 0) or 0)) or YT_HEIGHT
+    subs.info["PlayResX"] = str(play_x)
+    subs.info["PlayResY"] = str(play_y)
+    sx, sy = play_x / YT_WIDTH, play_y / YT_HEIGHT
+
+    op = normalize_watermark_opacity(opacity)
+    alpha = int(round((1.0 - op) * 255))
+    style = SSAStyle()
+    style.fontname = font_name
+    style.fontsize = max(12, int(round(font_size * sy)))
+    style.bold = True
+    style.primarycolor = Color(255, 255, 255, alpha)
+    style.secondarycolor = Color(255, 255, 255, alpha)
+    style.outlinecolor = Color(0, 0, 0, min(255, alpha + 30))
+    style.backcolor = Color(0, 0, 0, min(255, alpha + 70))
+    style.borderstyle = 1
+    style.outline = 2.5
+    style.shadow = 1.5
+    align_map = {
+        "top_left": Alignment.TOP_LEFT,
+        "top_right": Alignment.TOP_RIGHT,
+        "bottom_left": Alignment.BOTTOM_LEFT,
+        "bottom_right": Alignment.BOTTOM_RIGHT,
+    }
+    style.alignment = align_map[normalize_watermark_position(position)]
+    style.marginl = style.marginr = int(round(WM_MARGIN_SIDE * sx))
+    style.marginv = int(round(WM_MARGIN_VERTICAL * sy))
+    subs.styles["YTSeriesWatermark"] = style
+
+    clean = (text or "").strip().replace("{", "(").replace("}", ")").replace("\n", " ")
+    end_ms = max(1000, int(round(float(total_duration) * 1000)) + 500)
+    subs.events.append(SSAEvent(start=0, end=end_ms, text=clean, style="YTSeriesWatermark", layer=0))
+    subs.save(str(ass_path), encoding="utf-8")
+    return ass_path
+
+
+_ROMAN_PAIRS: Tuple[Tuple[int, str], ...] = (
+    (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+    (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
+    (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
+)
+
+
+def to_roman(number: int) -> str:
+    """Chuyển số tập nguyên dương (1, 2, 3, 4, 5...) sang chữ số La Mã (I, II, III, IV, V...)."""
+    n = max(1, int(number))
+    out: List[str] = []
+    for val, sym in _ROMAN_PAIRS:
+        while n >= val:
+            out.append(sym)
+            n -= val
+    return "".join(out)
+
+
+def format_chapter_badge_text(chapter_index: int, chapter_title: str) -> str:
+    """Định dạng nhãn chương siêu mảnh góc trên: `CHƯƠNG I · <TÊN CHƯƠNG>`."""
+    roman = to_roman(chapter_index)
+    title_clean = re.sub(r"\s+", " ", (chapter_title or "").strip()).upper()
+    return f"CHƯƠNG {roman} · {title_clean}" if title_clean else f"CHƯƠNG {roman}"
+
+
+def resolve_lower_third_margin_v(config: Optional["SeriesCompileConfig"] = None) -> int:
+    """Tính tọa độ `MarginV` cho thanh Lower-Third (tự nâng từ 84px lên 175px khi có phụ đề đốt hoặc Watermark đáy trái)."""
+    cfg = config or SeriesCompileConfig()
+    wm_bottom_left = bool(cfg.watermark_enabled) and normalize_watermark_position(cfg.watermark_position) == "bottom_left"
+    if cfg.subtitle_mode == "burn_and_srt" or wm_bottom_left:
+        return LOWER_THIRD_MARGIN_V_RAISED
+    return LOWER_THIRD_MARGIN_V_DEFAULT
+
+
+def resolve_chapter_badge_position(config: Optional["SeriesCompileConfig"] = None) -> str:
+    """Tính góc đặt Nhãn Chương (mặc định `top_right`; tự đổi sang `top_left` khi Watermark ở `top_right`)."""
+    cfg = config or SeriesCompileConfig()
+    if bool(cfg.watermark_enabled) and normalize_watermark_position(cfg.watermark_position) == "top_right":
+        return "top_left"
+    return "top_right"
+
+
+def build_episode_lower_thirds(
+    kept_scenes: Sequence[StoryScene],
+    timeline_starts: Sequence[float],
+    scene_durations: Sequence[float],
+    *,
+    episode_offset_sec: float = 0.0,
+) -> List[Tuple[float, float, str]]:
+    """Trích xuất các mốc `(start_sec, end_sec, on_screen_text)` từ các cảnh được giữ lại (đã loại cảnh CTA bị cắt).
+
+    Mỗi Lower-Third hiển thị trong `min(3.5s, max(1.2s, scene_dur - 0.3s))` đầu cảnh rồi tự ẩn.
+    """
+    cues: List[Tuple[float, float, str]] = []
+    for i, sc in enumerate(kept_scenes):
+        raw_txt = re.sub(r"\s+", " ", (getattr(sc, "on_screen_text", None) or "").strip())
+        if not raw_txt:
+            continue
+        sc_start = float(timeline_starts[i]) if i < len(timeline_starts) else 0.0
+        sc_dur = float(scene_durations[i]) if i < len(scene_durations) else 0.0
+        if sc_dur <= 0.1:
+            continue
+        show_dur = min(3.5, max(1.2, sc_dur - 0.3))
+        st = round(float(episode_offset_sec) + sc_start, 3)
+        en = round(st + show_dur, 3)
+        cues.append((st, en, raw_txt))
+    return cues
+
+
+def write_lower_third_ass(
+    ass_path: Path,
+    lower_thirds: Sequence[Tuple[float, float, str]],
+    *,
+    config: Optional["SeriesCompileConfig"] = None,
+    font_name: str = "Arial",
+    font_size: int = LOWER_THIRD_FONT_SIZE,
+) -> Path:
+    """Chèn lớp Thanh Lower-Third mốc lịch sử (`on_screen_text`) vào file ASS chuẩn 1920x1080."""
+    from pysubs2 import Alignment, Color, SSAEvent, SSAFile, SSAStyle
+
+    cfg = config or SeriesCompileConfig()
+    subs = SSAFile.load(str(ass_path), encoding="utf-8") if ass_path.is_file() else SSAFile()
+    play_x = int(float(subs.info.get("PlayResX", 0) or 0)) or YT_WIDTH
+    play_y = int(float(subs.info.get("PlayResY", 0) or 0)) or YT_HEIGHT
+    subs.info["PlayResX"] = str(play_x)
+    subs.info["PlayResY"] = str(play_y)
+    sx, sy = play_x / YT_WIDTH, play_y / YT_HEIGHT
+
+    margin_v = resolve_lower_third_margin_v(cfg)
+    style = SSAStyle()
+    style.fontname = font_name
+    style.fontsize = max(16, int(round(font_size * sy)))
+    style.bold = True
+    style.primarycolor = Color(255, 255, 255, 0)
+    style.secondarycolor = Color(217, 164, 65, 0)
+    style.outlinecolor = Color(14, 16, 20, 48)
+    style.backcolor = Color(10, 12, 16, 75)
+    style.borderstyle = 3
+    style.outline = 8.0
+    style.shadow = 0.0
+    style.alignment = Alignment.BOTTOM_LEFT
+    style.marginl = int(round(LOWER_THIRD_MARGIN_L * sx))
+    style.marginr = int(round(LOWER_THIRD_MARGIN_R * sx))
+    style.marginv = int(round(margin_v * sy))
+    subs.styles["YTSeriesLowerThird"] = style
+
+    for st_sec, en_sec, raw_txt in lower_thirds:
+        clean = (raw_txt or "").strip().replace("{", "(").replace("}", ")").replace("\n", " ")
+        if not clean or en_sec <= st_sec:
+            continue
+        start_ms = max(0, int(round(float(st_sec) * 1000)))
+        end_ms = max(start_ms + 300, int(round(float(en_sec) * 1000)))
+        styled_txt = rf"{{\fad(350,400)}}{{\c{LOWER_THIRD_ACCENT_HEX_BGR}}}▍{{\c&HFFFFFF&}}  {clean}"
+        subs.events.append(SSAEvent(start=start_ms, end=end_ms, text=styled_txt, style="YTSeriesLowerThird", layer=1))
+
+    subs.save(str(ass_path), encoding="utf-8")
+    return ass_path
+
+
+def write_chapter_badge_ass(
+    ass_path: Path,
+    chapters: Sequence[ChapterMarker],
+    *,
+    config: Optional["SeriesCompileConfig"] = None,
+    font_name: str = "Arial",
+    font_size: int = CHAPTER_BADGE_FONT_SIZE,
+) -> Path:
+    """Chèn lớp Nhãn Chương siêu mảnh (`CHƯƠNG I · ...`) suốt thời lượng nội dung từng tập (né Thẻ chương & End Credits)."""
+    from pysubs2 import Alignment, Color, SSAEvent, SSAFile, SSAStyle
+
+    cfg = config or SeriesCompileConfig()
+    subs = SSAFile.load(str(ass_path), encoding="utf-8") if ass_path.is_file() else SSAFile()
+    play_x = int(float(subs.info.get("PlayResX", 0) or 0)) or YT_WIDTH
+    play_y = int(float(subs.info.get("PlayResY", 0) or 0)) or YT_HEIGHT
+    subs.info["PlayResX"] = str(play_x)
+    subs.info["PlayResY"] = str(play_y)
+    sx, sy = play_x / YT_WIDTH, play_y / YT_HEIGHT
+
+    alpha = int(round((1.0 - CHAPTER_BADGE_OPACITY) * 255))
+    badge_pos = resolve_chapter_badge_position(cfg)
+    style = SSAStyle()
+    style.fontname = font_name
+    style.fontsize = max(12, int(round(font_size * sy)))
+    style.bold = True
+    style.primarycolor = Color(255, 255, 255, alpha)
+    style.secondarycolor = Color(255, 255, 255, alpha)
+    style.outlinecolor = Color(0, 0, 0, min(255, alpha + 35))
+    style.backcolor = Color(0, 0, 0, min(255, alpha + 80))
+    style.borderstyle = 1
+    style.outline = 2.0
+    style.shadow = 1.2
+    style.alignment = Alignment.TOP_LEFT if badge_pos == "top_left" else Alignment.TOP_RIGHT
+    style.marginl = style.marginr = int(round(WM_MARGIN_SIDE * sx))
+    style.marginv = int(round(WM_MARGIN_VERTICAL * sy))
+    subs.styles["YTSeriesChapterBadge"] = style
+
+    for ch in chapters:
+        st_sec = float(ch.episode_start_sec)
+        en_sec = float(ch.episode_start_sec) + float(ch.duration_sec)
+        if en_sec <= st_sec + 0.1:
+            continue
+        badge_txt = format_chapter_badge_text(ch.chapter_index, ch.chapter_title).replace("{", "(").replace("}", ")")
+        start_ms = max(0, int(round(st_sec * 1000)))
+        end_ms = max(start_ms + 200, int(round(en_sec * 1000)))
+        styled_txt = rf"{{\fad(300,300)}}{badge_txt}"
+        subs.events.append(SSAEvent(start=start_ms, end=end_ms, text=styled_txt, style="YTSeriesChapterBadge", layer=0))
+
+    subs.save(str(ass_path), encoding="utf-8")
+    return ass_path
+
+
+def _concat_scenes_with_xfade_16x9(
+    clips: Sequence[Path],
+    base_durations: Sequence[float],
+    out_video: Path,
+    work: Path,
+    *,
+    transition: str,
+    trans_dur: float,
+    crf: int,
+    preset: str,
+) -> bool:
+    """Ghép các clip cảnh 16:9 bằng xfade (clip i < n-1 đã được đệm thêm `trans_dur` ở đuôi).
+
+    Offset chuyển cảnh đặt đúng tại mốc ranh giới âm thanh nên tổng thời lượng giữ khớp 100% audio.
+    Trả về False để bên gọi tự lùi an toàn về nối cứng.
+    """
+    if len(clips) < 2 or len(clips) != len(base_durations):
+        return False
+    inputs: List[str] = []
+    for c in clips:
+        inputs += ["-i", str(c)]
+    fc: List[str] = [f"[{i}:v]settb=AVTB,fps={YT_FPS},format=yuv420p[v{i}]" for i in range(len(clips))]
+    acc = "[v0]"
+    offset = 0.0
+    for i in range(len(clips) - 1):
+        offset += float(base_durations[i])
+        out_lbl = "[vout]" if i == len(clips) - 2 else f"[xf{i + 1}]"
+        fc.append(f"{acc}[v{i + 1}]xfade=transition={transition}:duration={trans_dur:.3f}:offset={offset:.3f}{out_lbl}")
+        acc = out_lbl
+    res = run_ffmpeg(
+        [
+            *inputs,
+            "-filter_complex", ";".join(fc),
+            "-map", "[vout]",
+            "-r", str(YT_FPS),
+            "-c:v", "libx264",
+            "-profile:v", "high",
+            "-preset", preset,
+            "-crf", str(int(crf)),
+            "-pix_fmt", "yuv420p",
+            "-an",
+            str(out_video),
+        ],
+        cwd=work,
+        check=False,
+    )
+    return res.returncode == 0 and out_video.is_file()
 
 
 def _render_episode_chunk(
@@ -1913,16 +2380,28 @@ def _render_episode_chunk(
     native_16x9_kept = [sc.id for sc in kept_scenes if sc.id in native_16x9_set]
     fallback_kept = [sc.id for sc in kept_scenes if sc.id in fallback_set]
 
+    transition, trans_dur = normalize_xfade_settings(config.xfade_transition, config.xfade_duration)
+    use_xfade = transition != "none" and n_kept >= 2
+    if use_xfade:
+        # Giới hạn thời lượng chuyển ≤ 45% cảnh ngắn nhất để không nuốt mất nội dung cảnh
+        shortest = min(float(d) for d in scene_durations[:n_kept]) if n_kept else 0.0
+        trans_dur = round(min(trans_dur, max(0.0, shortest * 0.45)), 3)
+        use_xfade = trans_dur >= 0.08
+    base_render_durs: List[float] = []
+
     for i, sc in enumerate(kept_scenes):
         rep.check_cancel()
         asset_file = asset_map[sc.id]
         is_video = asset_file.suffix.lower() in ASSET_VIDEO_EXTS
         # Cảnh cuối bù nhẹ 0.05s hình để mux -t ep_duration không hụt frame
         render_dur = scene_durations[i] + (0.05 if i == n_kept - 1 else 0.0)
+        base_render_durs.append(render_dur)
+        # Đệm đuôi đúng trans_dur cho các cảnh trước cảnh cuối để xfade không làm ngắn tổng thời lượng
+        tail_pad = trans_dur if (use_xfade and i < n_kept - 1) else 0.0
         clip_path = scenes_dir / f"sc_{sc.id:03d}.mkv"
         _render_scene_video_16x9(
             asset_file,
-            render_dur,
+            render_dur + tail_pad,
             clip_path,
             motion=sc.ken_burns or sc.motion,
             layout_mode=config.layout_mode,
@@ -1931,19 +2410,56 @@ def _render_episode_chunk(
             anti_ai_level=config.anti_ai_level,
             crf=config.crf,
             preset=config.preset,
+            smart_clip_fit=bool(config.smart_clip_fit),
+            enable_film_grain_vignette=bool(config.enable_film_grain_vignette),
         )
         scene_clips.append(clip_path)
 
+    rep.check_cancel()
     ep_video_only = ep_work / "ep_video_only.mkv"
     if len(scene_clips) == 1:
         ep_video_only = scene_clips[0]
     else:
-        concat_txt = ep_work / "scenes_concat.txt"
-        concat_txt.write_text(
-            "".join(f"file '{p.relative_to(ep_work).as_posix()}'\n" for p in scene_clips),
-            encoding="utf-8",
-        )
-        run_ffmpeg(["-f", "concat", "-safe", "0", "-i", concat_txt.name, "-c", "copy", str(ep_video_only)], cwd=ep_work)
+        xfade_done = False
+        if use_xfade:
+            xfade_done = _concat_scenes_with_xfade_16x9(
+                scene_clips,
+                base_render_durs,
+                ep_video_only,
+                ep_work,
+                transition=transition,
+                trans_dur=trans_dur,
+                crf=config.crf,
+                preset=config.preset,
+            )
+            if not xfade_done:
+                rep.log("⚠️ Xfade không khả dụng cho tập này -> tự lùi về nối cứng.", "warn")
+        if not xfade_done:
+            concat_txt = ep_work / "scenes_concat.txt"
+            if use_xfade:
+                # Clip đã đệm đuôi: cắt đúng thời lượng gốc bằng outpoint rồi mã hóa lại để giữ khớp audio
+                concat_txt.write_text(
+                    "".join(
+                        f"file '{p.relative_to(ep_work).as_posix()}'\noutpoint {base_render_durs[k]:.4f}\n"
+                        for k, p in enumerate(scene_clips)
+                    ),
+                    encoding="utf-8",
+                )
+                run_ffmpeg(
+                    [
+                        "-f", "concat", "-safe", "0", "-i", concat_txt.name,
+                        "-r", str(YT_FPS), "-c:v", "libx264", "-profile:v", "high",
+                        "-preset", config.preset, "-crf", str(int(config.crf)), "-pix_fmt", "yuv420p", "-an",
+                        str(ep_video_only),
+                    ],
+                    cwd=ep_work,
+                )
+            else:
+                concat_txt.write_text(
+                    "".join(f"file '{p.relative_to(ep_work).as_posix()}'\n" for p in scene_clips),
+                    encoding="utf-8",
+                )
+                run_ffmpeg(["-f", "concat", "-safe", "0", "-i", concat_txt.name, "-c", "copy", str(ep_video_only)], cwd=ep_work)
 
     ep_muxed_mkv = work_dir / f"chunk_ep_{chapter_index:02d}.mkv"
     run_ffmpeg([
@@ -1962,6 +2478,7 @@ def _render_episode_chunk(
     ep_actual_dur = probe(ep_muxed_mkv).duration
     skipped_actual = sorted(sc.id for sc in sb.scenes if sc.id in skip_set)
     archival_kept = sorted(sc.id for sc in kept_scenes if sc.id in archival_ids)
+    ep_lower_thirds = build_episode_lower_thirds(kept_scenes, timeline_starts, scene_durations, episode_offset_sec=0.0)
     marker = ChapterMarker(
         chapter_index=chapter_index,
         episode_id=ep.episode_id,
@@ -1976,6 +2493,7 @@ def _render_episode_chunk(
         audio_source=audio_source,
         native_16x9_scenes=native_16x9_kept,
         fallback_assets_scenes=fallback_kept,
+        lower_thirds=ep_lower_thirds,
     )
     return ep_muxed_mkv, ep_actual_dur, marker, ep_segments
 
@@ -2006,8 +2524,11 @@ def _master_series_mp4(
     config: SeriesCompileConfig,
     work_dir: Path,
     rep: Reporter,
+    *,
+    chapters: Sequence[ChapterMarker] = (),
+    lower_thirds: Sequence[Tuple[float, float, str]] = (),
 ) -> None:
-    """Trộn BGM 1.00x (tùy chọn), đốt phụ đề (nếu chọn burn_and_srt), chuẩn hóa -14 LUFS & xóa metadata."""
+    """Trộn BGM 1.00x (tùy chọn), đốt phụ đề / Lower-Third / Nhãn Chương / Watermark, chuẩn hóa -14 LUFS & xóa metadata."""
     resolved_bgm: Optional[Path] = None
     if config.bgm_path:
         cand = Path(config.bgm_path)
@@ -2019,23 +2540,48 @@ def _master_series_mp4(
         prepared_bgm = _prepare_bgm_audio(resolved_bgm, work_dir, master_duration, reporter=rep)
 
     burn_subs = config.subtitle_mode == "burn_and_srt"
-    has_wm = bool((config.watermark_text or "").strip())
-    need_ass_burn = burn_subs or has_wm
+    wm_text = resolve_effective_watermark_text(config)
+    has_wm = bool(wm_text)
+    has_lt = bool(config.show_lower_third and lower_thirds)
+    has_badge = bool(config.show_chapter_badge and chapters)
+    need_ass_burn = burn_subs or has_wm or has_lt or has_badge
     ass_name = "yt_subs.ass"
-    if need_ass_burn:
+    ass_path = work_dir / ass_name
+    if burn_subs:
         generate_story_karaoke_ass(
             all_segments,
-            work_dir / ass_name,
+            ass_path,
             font_size=config.sub_font_size,
             font_name=config.sub_font,
             subtitle_style=config.subtitle_style,
             sub_color=config.sub_color,
-            watermark_text=(config.watermark_text or "").strip() or None,
-            watermark_pos=config.watermark_pos,
-            watermark_opacity=config.watermark_opacity,
+            watermark_text=None,
             total_duration=master_duration,
-            burn_subtitles=burn_subs,
+            burn_subtitles=True,
             frame_preset="landscape_16_9",
+        )
+    if has_wm and wm_text:
+        write_watermark_ass(
+            ass_path,
+            wm_text,
+            position=config.watermark_position,
+            opacity=config.watermark_opacity,
+            total_duration=master_duration,
+            font_name=config.sub_font,
+        )
+    if has_lt:
+        write_lower_third_ass(
+            ass_path,
+            lower_thirds,
+            config=config,
+            font_name=config.sub_font,
+        )
+    if has_badge:
+        write_chapter_badge_ass(
+            ass_path,
+            chapters,
+            config=config,
+            font_name=config.sub_font,
         )
 
     post_audio: List[str] = []
@@ -2049,6 +2595,7 @@ def _master_series_mp4(
     bgm_fade_in = min(1.0, max(0.1, master_duration * 0.15))
     bgm_fade_out = min(1.8, max(0.2, master_duration * 0.25))
     bgm_fade_out_st = max(0.0, master_duration - bgm_fade_out)
+    codec_key = str(getattr(config, "video_codec", "h264") or "h264").strip().lower()
 
     def build_cmd(*, include_normalize: bool, force_reencode_video: bool) -> List[str]:
         inputs: List[str] = ["-i", str(concat_mkv)]
@@ -2078,15 +2625,8 @@ def _master_series_mp4(
         else:
             fc_parts.append(f"[0:a]{fmt_48k},{post_chain}[aout]")
 
-        if need_ass_burn or force_reencode_video:
-            v_args = [
-                "-r", str(YT_FPS),
-                "-c:v", "libx264",
-                "-profile:v", "high",
-                "-preset", config.preset,
-                "-crf", str(int(config.crf)),
-                "-pix_fmt", "yuv420p",
-            ]
+        if need_ass_burn or force_reencode_video or codec_key == "h265":
+            v_args = build_final_video_encode_args(config)
         else:
             v_args = ["-c:v", "copy"]
 
@@ -2133,6 +2673,19 @@ def compile_series_youtube(
         raise DubberError(f"layout_mode '{cfg.layout_mode}' không hợp lệ (chấp nhận: {VALID_LAYOUT_MODES}).")
     if cfg.subtitle_mode not in VALID_SUBTITLE_MODES:
         raise DubberError(f"subtitle_mode '{cfg.subtitle_mode}' không hợp lệ (chấp nhận: {VALID_SUBTITLE_MODES}).")
+    if cfg.watermark_position not in VALID_WATERMARK_POSITIONS:
+        raise DubberError(
+            f"watermark_position '{cfg.watermark_position}' không hợp lệ (chấp nhận: {VALID_WATERMARK_POSITIONS})."
+        )
+    if cfg.xfade_transition not in VALID_XFADE_TRANSITIONS:
+        raise DubberError(
+            f"xfade_transition '{cfg.xfade_transition}' không hợp lệ (chấp nhận: {VALID_XFADE_TRANSITIONS})."
+        )
+    if cfg.video_codec not in VALID_VIDEO_CODECS:
+        raise DubberError(f"video_codec '{cfg.video_codec}' không hợp lệ (chấp nhận: {VALID_VIDEO_CODECS}).")
+    eff_wm_pos = normalize_watermark_position(cfg.watermark_position)
+    eff_wm_opacity = normalize_watermark_opacity(cfg.watermark_opacity)
+    eff_xfade_trans, eff_xfade_dur = normalize_xfade_settings(cfg.xfade_transition, cfg.xfade_duration)
     spd = float(cfg.speed_factor)
     if not (MIN_SPEED_FACTOR <= spd <= MAX_SPEED_FACTOR):
         raise DubberError(
@@ -2178,6 +2731,7 @@ def compile_series_youtube(
         concat_clips: List[Path] = []
         chapters: List[ChapterMarker] = []
         all_srt_segments: List[Segment] = []
+        all_lower_thirds: List[Tuple[float, float, str]] = []
         cursor = 0.0
         total_eps = len(active_episodes)
         rep.log(
@@ -2239,6 +2793,11 @@ def compile_series_youtube(
             marker.start_sec = round(chapter_start, 3)
             marker.episode_start_sec = round(episode_start, 3)
             marker.card_duration_sec = round(card_dur, 3)
+            marker.lower_thirds = [
+                (round(st + episode_start, 3), round(en + episode_start, 3), txt)
+                for (st, en, txt) in marker.lower_thirds
+            ]
+            all_lower_thirds.extend(marker.lower_thirds)
             chapters.append(marker)
 
             for seg in ep_segments:
@@ -2283,15 +2842,28 @@ def compile_series_youtube(
         rep.progress(90, "Đang trộn BGM 1.00x, chuẩn hóa -14 LUFS và xuất MP4 sạch metadata...")
         lufs_note = "loudnorm -14 LUFS" if cfg.loudnorm_youtube else "không loudnorm"
         rep.log(f"🎚️ Đang mastering ({lufs_note}, phụ đề {cfg.subtitle_mode})...", "info")
-        _master_series_mp4(master_mkv, video_out, master_duration, all_srt_segments, cfg, work_dir, rep)
+        _master_series_mp4(
+            master_mkv,
+            video_out,
+            master_duration,
+            all_srt_segments,
+            cfg,
+            work_dir,
+            rep,
+            chapters=chapters,
+            lower_thirds=all_lower_thirds,
+        )
 
         out_details = probe_video_details(video_out)
 
-        # Xuất file phụ đề .srt chuẩn khớp 100% thời lượng thực tế
-        srt_text = format_srt(all_srt_segments)
-        srt_out.write_text(srt_text, encoding="utf-8")
+        # Xuất file phụ đề .srt chuẩn khớp 100% thời lượng thực tế (bỏ qua hoàn toàn khi subtitle_mode == "none")
+        actual_srt_out: Optional[Path] = None
+        if cfg.subtitle_mode != "none":
+            srt_text = format_srt(all_srt_segments)
+            srt_out.write_text(srt_text, encoding="utf-8")
+            actual_srt_out = srt_out
 
-        # Xuất mô tả YouTube Chapters + Nguồn bản quyền
+        # Xuất mô tả YouTube Chapters + Nguồn bản quyền (luôn giữ nguyên mốc thời gian Chapters)
         desc_text = build_youtube_description(
             display_series_title,
             chapters,
@@ -2310,7 +2882,7 @@ def compile_series_youtube(
             "output_dir": str(out_dir),
             "outputs": {
                 "video": str(video_out),
-                "subtitles_srt": str(srt_out),
+                "subtitles_srt": str(actual_srt_out) if actual_srt_out else None,
                 "youtube_description": str(desc_out),
                 "compliance_report": str(report_out),
             },
@@ -2319,6 +2891,17 @@ def compile_series_youtube(
                 "subtitle_mode": cfg.subtitle_mode,
                 "speed_factor": spd,
                 "anti_ai_level": normalize_anti_ai_level(cfg.anti_ai_level),
+                "watermark_enabled": bool(cfg.watermark_enabled),
+                "watermark_text": resolve_effective_watermark_text(cfg),
+                "watermark_position": eff_wm_pos,
+                "watermark_opacity": eff_wm_opacity,
+                "xfade_transition": eff_xfade_trans,
+                "xfade_duration": eff_xfade_dur,
+                "smart_clip_fit": bool(cfg.smart_clip_fit),
+                "video_codec": cfg.video_codec,
+                "show_lower_third": bool(cfg.show_lower_third),
+                "show_chapter_badge": bool(cfg.show_chapter_badge),
+                "enable_film_grain_vignette": bool(cfg.enable_film_grain_vignette),
                 "loudnorm_youtube": bool(cfg.loudnorm_youtube),
                 "target_lufs": -14.0 if cfg.loudnorm_youtube else None,
                 "include_chapter_cards": bool(cfg.include_chapter_cards),
@@ -2340,6 +2923,7 @@ def compile_series_youtube(
                 "duration_sec": round(out_details.duration, 3),
                 "has_video": out_details.has_video,
                 "has_audio": out_details.has_audio,
+                "video_codec": cfg.video_codec,
                 "metadata_stripped": True,
             },
             "episodes": [c.to_dict() for c in chapters],
@@ -2352,7 +2936,7 @@ def compile_series_youtube(
 
         return SeriesCompileResult(
             video_path=video_out,
-            srt_path=srt_out,
+            srt_path=actual_srt_out,
             description_path=desc_out,
             report_path=report_out,
             chapters=chapters,

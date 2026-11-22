@@ -316,6 +316,12 @@ _ARCHIVAL_STRIP_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"\bfiery\s+amber\s+sky\b", re.I),
     re.compile(r"\bunder\s+harsh\s+afternoon\s+sunlight\b", re.I),
     re.compile(r"\bharsh\s+afternoon\s+sunlight\b", re.I),
+    re.compile(r"\bwarm\s+sunlight\s+rays\b", re.I),
+    re.compile(r"\bgolden\s+hour(?:\s+(?:glow|lighting|light))?\b", re.I),
+    re.compile(r"\b(?:subtly\s+colorized\s+)?(?:high-iso\s+)?(?:vintage\s+)?(?:35mm\s+)?kodachrome(?:\s+(?:night\s+)?film(?:\s+look)?)?\b", re.I),
+    re.compile(r"\b(?:subtly\s+)?colorized\b", re.I),
+    re.compile(r"\b(?:teal[\s-]+and[\s-]+orange|orange[\s-]+and[\s-]+teal)\b", re.I),
+    re.compile(r"\bcinematic\s+bokeh\b", re.I),
     re.compile(r"\b(?:2d\s+illustration|2d\s+animation|cel-shading|painted\s+illustration|digital\s+painting)\b", re.I),
     re.compile(r"\b(?:cinematic\s+hdr|hyper-realistic|glossy|orange\s+and\s+teal|8k|muted\s+film\s+tones|atmospheric\s+depth)\b", re.I),
 )
@@ -328,7 +334,7 @@ def adapt_prompt_for_archival_photo(
     *,
     era_cue: str = "1954 Indochina",
 ) -> str:
-    """Ép prompt gửi lên Flow về chất ảnh phim báo chí tư liệu mộc đúng thập niên (Quy tắc 3 Tầng V5.4)."""
+    """Ép prompt gửi lên Flow về chuẩn ảnh phóng sự chiến trường V5.4 phục dựng sắc nét, gai góc, có chiều sâu."""
     if not (prompt or "").strip():
         return prompt
 
@@ -342,21 +348,27 @@ def adapt_prompt_for_archival_photo(
 
     if _NIGHT_SCENE_RE.search(cleaned):
         archival_cue = (
-            f"authentic {era_cue} archival documentary night photograph, cleanly restored 1954 archival "
-            "documentary photography, high-ISO 35mm monochrome war-correspondent press film, "
+            f"authentic {era_cue} archival documentary night photograph, "
+            "cleanly restored archival documentary war-correspondent photography, "
+            "high-ISO raw 35mm monochrome / near-monochrome film grain, "
+            "stark authentic natural lighting, deep gritty texture, "
             "crisp sharp historical detail of terrain, uniforms, smoke, fire and natural dim torchlight contrast, "
-            "subtle authentic silver halide film grain, candid documentary framing, "
-            "borderless edge-to-edge full-bleed frame, no photo border, no deckled edge, no fake scan frame, "
-            "no pillarbox, no letterbox, no 2D illustration, no digital painting, no glossy HDR, no plastic AI sheen"
+            "candid documentary framing, borderless edge-to-edge full-bleed frame, "
+            "no modern cinematic color grading, no golden hour glow, no teal-and-orange, "
+            "no glossy AI sheen, no fake scan frame, no photo border, no deckled edge, "
+            "no pillarbox, no letterbox, no 2D illustration, no digital painting, no glossy HDR"
         )
     else:
         archival_cue = (
-            f"authentic {era_cue} archival documentary photograph, cleanly restored 1954 archival "
-            "documentary photography, 35mm monochrome war-correspondent press film, "
-            "crisp sharp historical detail of terrain, uniforms, smoke and natural realistic overcast daylight, "
-            "subtle authentic silver halide film grain, candid documentary framing, "
-            "borderless edge-to-edge full-bleed frame, no photo border, no deckled edge, no fake scan frame, "
-            "no pillarbox, no letterbox, no 2D illustration, no digital painting, no glossy HDR, no plastic AI sheen"
+            f"authentic {era_cue} archival documentary photograph, "
+            "cleanly restored archival documentary war-correspondent photography, "
+            "raw 35mm monochrome / near-monochrome film grain, "
+            "stark authentic natural lighting, deep gritty texture, "
+            "crisp sharp historical detail of terrain, uniforms, smoke and natural overcast daylight, "
+            "candid documentary framing, borderless edge-to-edge full-bleed frame, "
+            "no modern cinematic color grading, no golden hour glow, no teal-and-orange, "
+            "no glossy AI sheen, no fake scan frame, no photo border, no deckled edge, "
+            "no pillarbox, no letterbox, no 2D illustration, no digital painting, no glossy HDR"
         )
 
     m_notext = re.search(r",?\s*\bno\s+text\b", cleaned, flags=re.I)
@@ -365,6 +377,37 @@ def adapt_prompt_for_archival_photo(
         tail = cleaned[m_notext.start() :].lstrip(" ,")
         return f"{head}, {archival_cue}, {tail}" if head else f"{archival_cue}, {tail}"
     return f"{cleaned}, {archival_cue}" if cleaned else archival_cue
+
+
+def should_apply_archival_photo(
+    scene_data: Optional[Dict[str, Any]],
+    *,
+    global_archival_photo: bool = True,
+) -> bool:
+    """Xác định có áp bộ lọc V5.4 cho cảnh hay không (hỗ trợ ghi đè `\"archival_photo\": false` ở từng cảnh)."""
+    if not global_archival_photo:
+        return False
+    if isinstance(scene_data, dict) and scene_data.get("archival_photo") is False:
+        return False
+    return True
+
+
+def prepare_image_prompt_for_scene(
+    scene_data: Optional[Dict[str, Any]],
+    frame_preset: Union[str, FramePreset, None],
+    *,
+    archival_photo: bool = True,
+    aspect_plan: Optional[Dict[str, Any]] = None,
+    selected_ui_aspect: Optional[str] = None,
+) -> str:
+    """Chuẩn bị prompt gửi lên Google Flow cho 1 cảnh (khung hình + chuẩn V5.4 nếu không bị tắt)."""
+    raw_prompt = str((scene_data or {}).get("image_prompt", "")).strip()
+    adapted = adapt_prompt_for_frame_preset(raw_prompt, frame_preset)
+    if should_apply_archival_photo(scene_data, global_archival_photo=archival_photo):
+        adapted = adapt_prompt_for_archival_photo(adapted)
+    if aspect_plan is not None:
+        return _augment_prompt_for_flow_aspect(adapted, aspect_plan, selected_ui_aspect)
+    return adapted
 
 
 def resolve_io_paths(
@@ -2307,7 +2350,7 @@ def run_images_mode(
     assets_dir: Optional[Path] = None,
     raw_dir: Optional[Path] = None,
     state_path: Optional[Path] = None,
-    archival_photo: bool = False,
+    archival_photo: bool = True,
 ) -> int:
     """Chế độ --mode images: gen toàn bộ ảnh gốc (0 tín dụng) theo từng đợt song song + xuất JPG đúng frame_preset."""
     ep_dir = storyboard_path.parent
@@ -2404,11 +2447,13 @@ def run_images_mode(
                 for pos, item in enumerate(chunk):
                     sid = item.scene_id
                     sc = item.scene_data
-                    raw_prompt = str(sc.get("image_prompt", "")).strip()
-                    adapted_prompt = adapt_prompt_for_frame_preset(raw_prompt, eff_fp)
-                    if archival_photo:
-                        adapted_prompt = adapt_prompt_for_archival_photo(adapted_prompt)
-                    prompt = _augment_prompt_for_flow_aspect(adapted_prompt, aspect_plan, selected_ui_aspect)
+                    prompt = prepare_image_prompt_for_scene(
+                        sc,
+                        eff_fp,
+                        archival_photo=archival_photo,
+                        aspect_plan=aspect_plan,
+                        selected_ui_aspect=selected_ui_aspect,
+                    )
 
                     cur_txt = _get_visible_body_text(page)
                     q_lim = _detect_queue_limit(cur_txt, baseline_text)
@@ -2938,8 +2983,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--archival-photo",
+        dest="archival_photo",
         action="store_true",
-        help="Ép prompt gửi lên Flow sang chất ảnh phim báo chí tư liệu mộc 1954 (gỡ style 2D/painting/HDR).",
+        default=True,
+        help="Mặc định BẬT (V5.4): ép prompt gửi lên Flow về chất ảnh phóng sự chiến trường phục dựng sắc nét (dùng --no-archival-photo để tắt).",
+    )
+    parser.add_argument(
+        "--no-archival-photo",
+        dest="archival_photo",
+        action="store_false",
+        help="Tắt bộ lọc ảnh phóng sự tư liệu V5.4 toàn cục (giữ nguyên prompt gốc trong storyboard).",
     )
     return parser
 

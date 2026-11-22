@@ -404,7 +404,7 @@ def run_phase_images(
     youtube_16x9: bool = False,
     assets_dir: Optional[Path] = None,
     raw_dir: Optional[Path] = None,
-    archival_photo: bool = False,
+    archival_photo: bool = True,
 ) -> int:
     # Khi chạy --youtube-16x9: chỉ validate read-only để không chạm assets/ hay pipeline_state.json của TikTok
     use_sync = (not dry_run) and (not youtube_16x9) and (assets_dir is None) and (raw_dir is None)
@@ -420,6 +420,8 @@ def run_phase_images(
         cmd.append("--dry-run")
     if archival_photo:
         cmd.append("--archival-photo")
+    else:
+        cmd.append("--no-archival-photo")
     if cdp_url:
         cmd.extend(["--cdp-url", cdp_url])
     if concurrency is not None:
@@ -645,7 +647,7 @@ def run_phase_all(
     youtube_16x9: bool = False,
     assets_dir: Optional[Path] = None,
     raw_dir: Optional[Path] = None,
-    archival_photo: bool = False,
+    archival_photo: bool = True,
 ) -> int:
     rc_img = run_phase_images(
         ep_dir,
@@ -797,8 +799,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--archival-photo",
+        dest="archival_photo",
         action="store_true",
-        help="Ép prompt gửi sang Google Flow về chất ảnh phim báo chí tư liệu mộc 1954 (gỡ style 2D/painting/HDR).",
+        default=True,
+        help="Mặc định BẬT (V5.4): ép prompt gửi sang Google Flow về chất ảnh phóng sự chiến trường phục dựng sắc nét (dùng --no-archival-photo để tắt).",
+    )
+    parser.add_argument(
+        "--no-archival-photo",
+        dest="archival_photo",
+        action="store_false",
+        help="Tắt bộ lọc ảnh phóng sự tư liệu V5.4 toàn cục (giữ nguyên prompt gốc).",
     )
     return parser
 

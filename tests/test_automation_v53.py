@@ -759,26 +759,56 @@ def test_validate_storyboard_accepts_optional_chapter_title_and_is_cta(tmp_path)
     assert any("is_cta" in err for err in t1_errors)
 
 
-def test_adapt_prompt_for_archival_photo_v54(tmp_path):
+def test_adapt_prompt_for_archival_photo_v54(tmp_path, monkeypatch):
     import run_episode
 
     day_2d = (
         "Dramatic high-angle view of Muong Thanh valley in 1953, "
         "epic 2D historical animation style, clean delicate lineart, rich cinematic cel-shading, "
+        "Kodachrome colorized glow, warm sunlight rays, golden hour, teal-and-orange, cinematic bokeh, "
         "warm dramatic lighting, moody blue and warm sunset contrast, vertical 9:16, no text"
     )
     out_day = flow_bot.adapt_prompt_for_archival_photo(
         flow_bot.adapt_prompt_for_frame_preset(day_2d, "landscape_16_9")
     )
     low_day = out_day.lower()
-    assert "2d historical animation" not in low_day
-    assert "cel-shading" not in low_day
-    assert "lineart" not in low_day
-    assert "painterly brushstrokes" not in low_day
+    cleaned_head = low_day.split("authentic 1954 indochina")[0]
+    for banned in (
+        "2d historical animation",
+        "cel-shading",
+        "lineart",
+        "painterly brushstrokes",
+        "kodachrome",
+        "colorized",
+        "warm sunlight rays",
+        "golden hour",
+        "teal-and-orange",
+        "cinematic bokeh",
+    ):
+        assert banned not in cleaned_head
+    for banned_global in (
+        "kodachrome",
+        "colorized",
+        "warm sunlight rays",
+        "cinematic bokeh",
+        "cel-shading",
+        "lineart",
+    ):
+        assert banned_global not in low_day
     assert "no 2d illustration" in low_day
     assert "16:9 widescreen" in low_day
     assert "authentic 1954 indochina archival documentary photograph" in low_day
-    assert "35mm monochrome war-correspondent press film" in low_day
+    assert "cleanly restored archival documentary war-correspondent photography" in low_day
+    assert "raw 35mm monochrome / near-monochrome film grain" in low_day
+    assert "stark authentic natural lighting" in low_day
+    assert "deep gritty texture" in low_day
+    assert "no modern cinematic color grading" in low_day
+    assert "no golden hour glow" in low_day
+    assert "no teal-and-orange" in low_day
+    assert "no glossy ai sheen" in low_day
+    assert "no fake scan frame" in low_day
+    assert "no pillarbox" in low_day
+    assert "no letterbox" in low_day
     assert low_day.endswith("no text")
 
     night_2d = (
@@ -792,14 +822,74 @@ def test_adapt_prompt_for_archival_photo_v54(tmp_path):
     assert "painterly brushstrokes" not in low_night
     assert "dramatic rim lighting" not in low_night
     assert "archival documentary night photograph" in low_night
-    assert "high-iso 35mm monochrome" in low_night
+    assert "high-iso raw 35mm monochrome / near-monochrome film grain" in low_night
+    assert "natural dim torchlight contrast" in low_night
+    assert "deep gritty texture" in low_night
 
-    fb_args = flow_bot.build_arg_parser().parse_args(
-        [str(tmp_path / "storyboard.json"), "--mode", "images", "--youtube-16x9", "--archival-photo"]
-    )
-    assert fb_args.archival_photo is True
+    # Mặc định CLI phải BẬT archival_photo=True và hỗ trợ tắt bằng --no-archival-photo
+    fb_default_args = flow_bot.build_arg_parser().parse_args([str(tmp_path / "storyboard.json"), "--mode", "images"])
+    assert fb_default_args.archival_photo is True
 
-    re_args = run_episode.build_arg_parser().parse_args(
-        [str(tmp_path), "--phase", "images", "--youtube-16x9", "--archival-photo"]
+    fb_off_args = flow_bot.build_arg_parser().parse_args(
+        [str(tmp_path / "storyboard.json"), "--mode", "images", "--no-archival-photo"]
     )
-    assert re_args.archival_photo is True
+    assert fb_off_args.archival_photo is False
+
+    re_default_args = run_episode.build_arg_parser().parse_args([str(tmp_path), "--phase", "images"])
+    assert re_default_args.archival_photo is True
+
+    re_off_args = run_episode.build_arg_parser().parse_args(
+        [str(tmp_path), "--phase", "images", "--no-archival-photo"]
+    )
+    assert re_off_args.archival_photo is False
+
+    # Ghi đè theo từng cảnh: "archival_photo": false bỏ qua bộ lọc V5.4, cảnh thường vẫn áp V5.4
+    diagram_scene = {
+        "id": 1,
+        "archival_photo": False,
+        "image_prompt": "Clean geological tunnel cross-section diagram with arrows, vertical 9:16, no text",
+    }
+    combat_scene = {
+        "id": 2,
+        "image_prompt": "Viet Minh soldiers advancing through misty trenches at dawn, vertical 9:16, no text",
+    }
+    assert flow_bot.should_apply_archival_photo(diagram_scene, global_archival_photo=True) is False
+    assert flow_bot.should_apply_archival_photo(combat_scene, global_archival_photo=True) is True
+    assert flow_bot.should_apply_archival_photo(combat_scene, global_archival_photo=False) is False
+
+    diagram_prompt = flow_bot.prepare_image_prompt_for_scene(diagram_scene, "portrait_9_16", archival_photo=True).lower()
+    combat_prompt = flow_bot.prepare_image_prompt_for_scene(combat_scene, "portrait_9_16", archival_photo=True).lower()
+    assert "war-correspondent photography" not in diagram_prompt
+    assert "geological tunnel cross-section diagram" in diagram_prompt
+    assert "war-correspondent photography" in combat_prompt
+
+    # Xác nhận run_phase_images(..., archival_photo=False) truyền đúng cờ --no-archival-photo xuống flow_bot.py
+    ep_dir = tmp_path / "Ep_Forward_Test"
+    ep_dir.mkdir()
+    sb_path = ep_dir / "storyboard.json"
+    sb_path.write_text('{"version":"3.0","title":"Test","scenes":[]}', encoding="utf-8")
+    captured_cmds = []
+    monkeypatch.setattr(run_episode, "_run_validate", lambda *a, **kw: 0)
+    monkeypatch.setattr(run_episode, "_load_json_safe", lambda *a, **kw: None)
+    monkeypatch.setattr(run_episode, "_run_subprocess", lambda cmd: captured_cmds.append(list(cmd)) or 0)
+
+    run_episode.run_phase_images(
+        ep_dir,
+        sb_path,
+        scenes_arg=None,
+        dry_run=True,
+        cdp_url=None,
+        archival_photo=False,
+    )
+    assert "--no-archival-photo" in captured_cmds[-1]
+    assert "--archival-photo" not in captured_cmds[-1]
+
+    run_episode.run_phase_images(
+        ep_dir,
+        sb_path,
+        scenes_arg=None,
+        dry_run=True,
+        cdp_url=None,
+    )
+    assert "--archival-photo" in captured_cmds[-1]
+    assert "--no-archival-photo" not in captured_cmds[-1]
