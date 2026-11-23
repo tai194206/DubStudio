@@ -31,8 +31,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .anti_ai_filter import (
     build_ai_scene_depolish_vf,
+    build_archival_harmonize_vf,
     get_clean_metadata_flags,
     load_archival_scene_ids,
+    load_house_look_scene_ids,
     normalize_anti_ai_level,
     probe_video_details,
 )
@@ -990,6 +992,7 @@ def build_youtube_16x9_scene_vf(
     layout_mode: str = "smart",
     is_video: Optional[bool] = None,
     is_archival: bool = False,
+    house_look_applied: bool = False,
     anti_ai_level: Union[str, bool, None] = "off",
     enable_film_grain_vignette: bool = False,
     src_size: Optional[Tuple[int, int]] = None,
@@ -1002,7 +1005,8 @@ def build_youtube_16x9_scene_vf(
     - `smart`: tỉ lệ gốc `w/h >= 1.45` -> full-bleed `1920x1080`; ảnh dọc/vuông -> Blurred Pillar-box.
     - `pillarbox`: luôn dùng khung tài liệu nền mờ cho ảnh không đúng 16:9.
     - `full_bleed`: luôn phủ kín `1920x1080`, ưu tiên giữ headroom (`0.30`).
-    - `is_archival=True`: miễn 100% lọc khử bóng Anti-AI để bảo toàn ảnh tư liệu lịch sử thật.
+    - `is_archival=True`: miễn 100% lọc khử bóng Anti-AI, chỉ hòa tông nhẹ ~15% non-destructive lúc render.
+    - `house_look_applied=True`: chống Double-Grading cho ảnh AI đã qua House Look V5.8 (pass-through nhẹ).
     - `enable_film_grain_vignette=True`: thêm hạt phim 35mm sống (`noise=alls=4:allf=t+u`) & tối góc nhẹ (`vignette=PI/6.5`).
     """
     if src_size is not None:
@@ -1019,6 +1023,7 @@ def build_youtube_16x9_scene_vf(
     effective_layout = resolve_youtube_16x9_layout(src_w, src_h, layout_mode)
     lv = normalize_anti_ai_level(anti_ai_level)
     apply_depolish = (not is_archival) and (lv != "off")
+    apply_archival_harmonize = is_archival and (lv != "off")
 
     if effective_layout == "full_bleed":
         parts = [
@@ -1032,15 +1037,24 @@ def build_youtube_16x9_scene_vf(
             parts.append(_build_ken_burns_zoompan(motion, duration, out_w, out_h, fps=fps, max_zoom=1.08))
             parts.append("setsar=1")
         if apply_depolish:
-            depolish = build_ai_scene_depolish_vf(lv, width=out_w, height=out_h)
+            depolish = build_ai_scene_depolish_vf(
+                lv,
+                width=out_w,
+                height=out_h,
+                house_look_applied=bool(house_look_applied),
+            )
             if depolish:
                 parts.append(depolish)
+        elif apply_archival_harmonize:
+            harm = build_archival_harmonize_vf(True)
+            if harm:
+                parts.append(harm)
         if enable_film_grain_vignette:
             parts.append(FILM_GRAIN_VIGNETTE_VF)
         parts.append("format=yuv420p")
         return ",".join(parts)
 
-    # Nhánh Blurred Pillar-box giữ trọn 100% tỉ lệ ảnh dọc/vuông
+    # Nhánh Blurred Pillar-box giữ trọn 100% tỉ lệ ảnh dọc/vuông (nền mờ phủ tông lạnh tối đồng bộ V5.8)
     border_px = 4
     fg_w, fg_h = _compute_pillarbox_fg_size(src_w, src_h, out_w=out_w, out_h=out_h, border_px=border_px)
     bg_chain = (
@@ -1048,7 +1062,8 @@ def build_youtube_16x9_scene_vf(
         "crop=480:270,setsar=1,"
         "gblur=sigma=12,"
         f"scale={out_w}:{out_h}:flags=bilinear,setsar=1,"
-        f"eq=brightness=-0.22:saturation=0.75,fps={fps}[bg_out]"
+        "eq=brightness=-0.22:saturation=0.75,"
+        f"colorbalance=rs=-0.05:gs=-0.01:bs=0.07:rm=-0.04:gm=0.00:bm=0.06,fps={fps}[bg_out]"
     )
 
     fg_steps: List[str] = [f"scale={fg_w}:{fg_h}:flags=lanczos", "setsar=1"]
@@ -1058,9 +1073,18 @@ def build_youtube_16x9_scene_vf(
         fg_steps.append(_build_ken_burns_zoompan(motion, duration, fg_w, fg_h, fps=fps, max_zoom=1.08))
         fg_steps.append("setsar=1")
     if apply_depolish:
-        depolish = build_ai_scene_depolish_vf(lv, width=fg_w, height=fg_h)
+        depolish = build_ai_scene_depolish_vf(
+            lv,
+            width=fg_w,
+            height=fg_h,
+            house_look_applied=bool(house_look_applied),
+        )
         if depolish:
             fg_steps.append(depolish)
+    elif apply_archival_harmonize:
+        harm = build_archival_harmonize_vf(True)
+        if harm:
+            fg_steps.append(harm)
 
     pad_w = fg_w + 2 * border_px
     pad_h = fg_h + 2 * border_px
@@ -1904,6 +1928,7 @@ def _render_scene_video_16x9(
     layout_mode: str,
     is_video: bool,
     is_archival: bool,
+    house_look_applied: bool = False,
     anti_ai_level: Union[str, bool, None],
     crf: int,
     preset: str,
@@ -1924,6 +1949,7 @@ def _render_scene_video_16x9(
         layout_mode=layout_mode,
         is_video=is_video,
         is_archival=is_archival,
+        house_look_applied=house_look_applied,
         anti_ai_level=anti_ai_level,
         enable_film_grain_vignette=enable_film_grain_vignette,
         src_size=src_size,
@@ -2350,6 +2376,12 @@ def _render_episode_chunk(
         | load_archival_scene_ids(assets_dir)
         | (load_archival_scene_ids(assets_16x9_dir) if assets_16x9_dir else set())
     )
+    hl_16x9_ids = load_house_look_scene_ids(ep.folder, prefer_16x9=True) | (
+        load_house_look_scene_ids(assets_16x9_dir, prefer_16x9=True) if assets_16x9_dir else set()
+    )
+    hl_9x16_ids = load_house_look_scene_ids(ep.folder, prefer_16x9=False) | load_house_look_scene_ids(
+        assets_dir, prefer_16x9=False
+    )
     skip_list = config.episode_skip_overrides.get(ep.episode_id)
     if skip_list is None:
         skip_list = ep.resolve_skip_scenes(auto_skip_mid_cta=config.auto_skip_mid_cta)
@@ -2399,6 +2431,7 @@ def _render_episode_chunk(
         # Đệm đuôi đúng trans_dur cho các cảnh trước cảnh cuối để xfade không làm ngắn tổng thời lượng
         tail_pad = trans_dur if (use_xfade and i < n_kept - 1) else 0.0
         clip_path = scenes_dir / f"sc_{sc.id:03d}.mkv"
+        is_hl = (sc.id in hl_16x9_ids) if (sc.id in native_16x9_set) else (sc.id in hl_9x16_ids)
         _render_scene_video_16x9(
             asset_file,
             render_dur + tail_pad,
@@ -2407,6 +2440,7 @@ def _render_episode_chunk(
             layout_mode=config.layout_mode,
             is_video=is_video,
             is_archival=(sc.id in archival_ids),
+            house_look_applied=is_hl,
             anti_ai_level=config.anti_ai_level,
             crf=config.crf,
             preset=config.preset,

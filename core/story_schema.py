@@ -139,6 +139,7 @@ class Storyboard:
     beats: list[dict] = field(default_factory=list)
     locations: dict[str, Any] = field(default_factory=dict)
     bgm: str = ""
+    look_reference: str = ""
 
     def __post_init__(self):
         self.title = str(self.title).strip()
@@ -150,6 +151,7 @@ class Storyboard:
         self.full_script_for_elevenlabs = str(self.full_script_for_elevenlabs).strip()
         self.style_suffix = str(self.style_suffix).strip()
         self.bgm = str(self.bgm).strip()
+        self.look_reference = str(self.look_reference).strip()
 
         if (not self.scenes or not isinstance(self.scenes, list)) and (not self.beats or not isinstance(self.beats, list)):
             raise DubberError("Storyboard thiếu danh sách 'scenes' hoặc 'beats'")
@@ -231,7 +233,7 @@ class Storyboard:
         return ""
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "version": self.version,
             "title": self.title,
             "aspect_ratio": self.aspect_ratio,
@@ -246,6 +248,9 @@ class Storyboard:
             "beats": self.beats,
             "locations": self.locations,
         }
+        if self.look_reference:
+            out["look_reference"] = self.look_reference
+        return out
 
     @classmethod
     def from_dict(cls, data: dict) -> Storyboard:
@@ -289,6 +294,7 @@ class Storyboard:
             beats=beats,
             locations=locations,
             bgm=data.get("bgm", ""),
+            look_reference=str(data.get("look_reference") or "").strip(),
         )
 
 

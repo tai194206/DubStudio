@@ -29,6 +29,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.anti_ai_filter import load_archival_scene_ids  # noqa: E402
+from core.config import DEFAULT_VISUAL_PRESET  # noqa: E402
 from core.frame_presets import (  # noqa: E402
     DEFAULT_FRAME_PRESET,
     FRAME_PRESETS,
@@ -137,6 +139,15 @@ FORBIDDEN_PATTERNS: List[Tuple[str, re.Pattern[str]]] = [
     (w, re.compile(r"\b" + re.escape(w) + r"\b", re.IGNORECASE))
     for w in FORBIDDEN_WORDS
 ]
+
+VALID_VISUAL_PRESETS = ("restored_doc_still", "raw", "archival_photo", "monochrome")
+
+LEGACY_MONOCHROME_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+    ("black and white", re.compile(r"(?<!charcoal )\bblack\s*(?:&|and|-)\s*white\b", re.IGNORECASE)),
+    ("b&w", re.compile(r"\bb\s*&\s*w\b", re.IGNORECASE)),
+    ("monochrome", re.compile(r"(?<!near-)(?<!near )\bmonochrome\b", re.IGNORECASE)),
+    ("grayscale", re.compile(r"\bgr[ae]yscale\b", re.IGNORECASE)),
+)
 
 # Tốc độ đọc ước lượng theo chuẩn V5 (~3.2 từ/giây + 0.35s nghỉ mỗi cảnh)
 WORDS_PER_SEC = 3.2
@@ -296,6 +307,14 @@ def validate_storyboard(path: Path) -> Tuple[List[TierReport], Optional[Dict[str
     if "chapter_title" in data and data["chapter_title"] is not None:
         if not isinstance(data["chapter_title"], str):
             t1.errors.append("Trường tùy chọn 'chapter_title' phải là chuỗi (str).")
+
+    if "visual_preset" in data and data["visual_preset"] is not None:
+        if not isinstance(data["visual_preset"], str):
+            t1.errors.append("Trường tùy chọn 'visual_preset' phải là chuỗi (str).")
+
+    if "look_reference" in data and data["look_reference"] is not None:
+        if not isinstance(data["look_reference"], (str, bool, int)) or isinstance(data["look_reference"], bool) and data["look_reference"] is True:
+            t1.errors.append("Trường tùy chọn 'look_reference' phải là chuỗi (đường dẫn/mã cảnh/'none') hoặc false.")
 
     scenes_raw = data.get("scenes")
     if not isinstance(scenes_raw, list) or len(scenes_raw) == 0:
@@ -662,9 +681,45 @@ def validate_storyboard(path: Path) -> Tuple[List[TierReport], Optional[Dict[str
                     f"Cảnh {sid}: 'on_screen_text' chưa viết IN HOA: {ost!r}."
                 )
 
+    raw_vp = data.get("visual_preset")
+    if isinstance(raw_vp, str) and raw_vp.strip():
+        eff_visual_preset = raw_vp.strip().lower()
+        if eff_visual_preset not in VALID_VISUAL_PRESETS:
+            t5.warnings.append(
+                f"Giá trị 'visual_preset'={raw_vp!r} không chuẩn (khuyên dùng: '{DEFAULT_VISUAL_PRESET}'; hợp lệ: {list(VALID_VISUAL_PRESETS)})."
+            )
+    else:
+        eff_visual_preset = DEFAULT_VISUAL_PRESET
+
+    # Cảnh báo nhẹ (không chặn) nếu cảnh AI gen mới dùng từ khóa ép đen trắng cũ (khi chưa được miễn)
+    try:
+        archival_ids = load_archival_scene_ids(path.parent)
+    except Exception:
+        archival_ids = set()
+
+    if eff_visual_preset not in ("monochrome", "raw"):
+        for i, sc in enumerate(scenes):
+            raw_sid = sc.get("id", i + 1)
+            sid = int(raw_sid) if isinstance(raw_sid, int) and not isinstance(raw_sid, bool) else (i + 1)
+            if sid in archival_ids or sc.get("archival_photo") is False or sc.get("allow_monochrome") is True:
+                continue
+            sc_vp = str(sc.get("visual_preset") or "").strip().lower()
+            if sc_vp in ("raw", "monochrome", "diagram"):
+                continue
+            prompt_str = str(sc.get("image_prompt") or "")
+            for label, pat in LEGACY_MONOCHROME_PATTERNS:
+                if pat.search(prompt_str):
+                    t5.warnings.append(
+                        f"Cảnh {sid}: 'image_prompt' chứa từ khóa ép đen trắng phẳng cũ ('{label}'); "
+                        f"chuẩn mặc định mới V5.8 Unified Cold Slate-Charcoal House Look là '{DEFAULT_VISUAL_PRESET}' "
+                        f"(tông lạnh slate-charcoal tẩy bạc đồng nhất cả video; gắn 'allow_monochrome': true nếu cố ý)."
+                    )
+                    break
+
     stats = {
         "title": str(data.get("title") or ""),
         "frame_preset": effective_frame_preset,
+        "visual_preset": eff_visual_preset,
         "asset_ratio_tier": effective_tier,
         "tier_label": tier_cfg["label"],
         "tier_inferred": tier_inferred,
@@ -741,17 +796,18 @@ def sync_episode_files(storyboard_path: Path, data: Dict[str, Any]) -> None:
             vid_status = default_video_status
             err_msg = ""
 
-        new_state_scenes.append(
-            {
-                "id": sid,
-                "asset_type": asset_type,
-                "target_image": target_image,
-                "target_asset": target_asset,
-                "image_status": img_status,
-                "video_status": vid_status,
-                "error": err_msg,
-            }
-        )
+        entry: Dict[str, Any] = {
+            "id": sid,
+            "asset_type": asset_type,
+            "target_image": target_image,
+            "target_asset": target_asset,
+            "image_status": img_status,
+            "video_status": vid_status,
+            "error": err_msg,
+        }
+        if old is not None and "house_look_applied" in old:
+            entry["house_look_applied"] = bool(old["house_look_applied"])
+        new_state_scenes.append(entry)
 
     try:
         fp_name = normalize_frame_preset(data.get("frame_preset"), allow_auto=False)
@@ -831,6 +887,7 @@ def print_report(
             f"  Khung hình (preset)   : {fp_stats.name} "
             f"(vùng ảnh {fp_stats.inner_w}x{fp_stats.inner_h} → xuất {fp_stats.out_w}x{fp_stats.out_h})"
         )
+        print(f"  Chuẩn hình ảnh (V5.6) : {stats.get('visual_preset', DEFAULT_VISUAL_PRESET)}")
         print(
             f"  Hạng tỉ lệ (tier)     : {tier_code} ({tier_src}) | "
             f"AI {pct_flow:.1f}% / Thật {pct_static:.1f}%"

@@ -112,34 +112,236 @@ PRESETS = {
 
 @dataclass(frozen=True)
 class AIDepolishSpec:
-    """Thông số khử bóng HDR nhẹ cho riêng từng cảnh tạo bằng AI."""
+    """Thông số V5.8 Unified Cold Slate-Charcoal Bleach-Bypass cho riêng từng cảnh tạo bằng AI."""
 
     scale_factor: float
     saturation: float
     curves: str
     noise: str
+    vignette: str = ""
+    denoise: str = ""
+    colorbalance: str = ""
 
 
+# Chuẩn V5.8 Unified Cold Slate-Charcoal House Look (CHỈ áp cho cảnh AI, miễn ảnh thật):
+# - Tiền khử nhiễu rất nhẹ (hqdn3d=0.6..1.0) trước hạt phim để giữ nguyên độ gai góc vải/da, không bệt nhựa.
+# - Curves low-key kết hợp colorbalance nghiêng lạnh slate-blue ở shadow/midtone để khóa chung 1 house look.
 DEPOLISH_SPECS = {
     "light": AIDepolishSpec(
         scale_factor=1.03,
-        saturation=0.95,
-        curves="curves=all='0/0 0.5/0.5 0.85/0.80 1/0.92'",
-        noise="noise=alls=4:allf=t+u",
+        saturation=0.62,
+        denoise="hqdn3d=0.6:0.5:1.2:1.0",
+        curves="curves=all='0/0 0.25/0.22 0.5/0.47 0.85/0.84 1/0.96'",
+        colorbalance="colorbalance=rs=-0.03:gs=0.00:bs=0.045:rm=-0.025:gm=0.00:bm=0.04:rh=0.015:gh=0.005:bh=-0.01",
+        noise="noise=alls=5:allf=t+u",
+        vignette="vignette=PI/7",
     ),
     "medium": AIDepolishSpec(
         scale_factor=1.03,
-        saturation=0.95,
-        curves="curves=all='0/0 0.5/0.5 0.85/0.77 1/0.88'",
-        noise="noise=alls=6:allf=t+u",
+        saturation=0.52,
+        denoise="hqdn3d=0.8:0.6:1.5:1.2",
+        curves="curves=all='0/0 0.25/0.20 0.5/0.45 0.85/0.82 1/0.95'",
+        colorbalance="colorbalance=rs=-0.04:gs=0.00:bs=0.06:rm=-0.03:gm=0.00:bm=0.05:rh=0.02:gh=0.01:bh=-0.01",
+        noise="noise=alls=7:allf=t+u",
+        vignette="vignette=PI/6",
     ),
     "strong": AIDepolishSpec(
         scale_factor=1.04,
-        saturation=0.93,
-        curves="curves=all='0/0 0.5/0.5 0.85/0.74 1/0.85'",
-        noise="noise=alls=8:allf=t+u",
+        saturation=0.44,
+        denoise="hqdn3d=1.0:0.8:1.8:1.4",
+        curves="curves=all='0/0 0.25/0.18 0.5/0.42 0.85/0.79 1/0.93'",
+        colorbalance="colorbalance=rs=-0.05:gs=0.00:bs=0.075:rm=-0.035:gm=0.00:bm=0.06:rh=0.02:gh=0.01:bh=-0.01",
+        noise="noise=alls=9:allf=t+u",
+        vignette="vignette=PI/5",
     ),
 }
+
+# Lớp hòa tông cực nhẹ ~15% lúc render cho ảnh tư liệu thật (non-destructive 100%, giữ nguyên file gốc & SHA-256)
+ARCHIVAL_HARMONIZE_VF = (
+    "eq=contrast=1.04:brightness=-0.02,"
+    "colorbalance=rs=-0.018:gs=0.00:bs=0.026:rm=-0.015:gm=0.00:bm=0.022:rh=-0.005:gh=0.00:bh=0.008"
+)
+
+
+def build_archival_harmonize_vf(enabled: bool = True) -> str:
+    """Trả về lớp hòa tông ~15% non-destructive áp lúc render cho cảnh tư liệu thật trong archive_sources.json."""
+    return ARCHIVAL_HARMONIZE_VF if enabled else ""
+
+DEFAULT_FLOW_WATERMARK_ZOOM = 1.04
+
+
+def is_archival_scene(
+    scene_id: Optional[int],
+    archival_scene_ids: Optional[set[int]],
+) -> bool:
+    """Kiểm tra scene_id có nằm trong danh sách ảnh tư liệu thật được bảo vệ miễn lọc/miễn crop."""
+    if scene_id is None or not archival_scene_ids:
+        return False
+    return int(scene_id) in archival_scene_ids
+
+
+def _erase_flow_corner_sparkle(rgb_img: Any) -> Any:
+    """Tự động phát hiện và làm sạch biểu tượng thoi 4 cánh nhỏ ở góc phải dưới của Google Flow.
+
+    Dùng khớp mẫu hình sao 4 cánh chuẩn (zero-mean astroid correlation) trong góc phải dưới
+    để khóa đúng tâm ±1px kể cả trên nền đá/lá phức tạp, sau đó lấp đa tầng (coarse-to-fine)
+    từ viền sạch xung quanh rồi hòa hạt phim vi mô.
+    """
+    import numpy as np
+    from PIL import Image
+
+    w, h = rgb_img.size
+    if w < 240 or h < 240:
+        return rgb_img
+
+    arr_u8 = np.asarray(rgb_img, dtype=np.uint8)
+    gray = np.asarray(rgb_img.convert("L"), dtype=np.float32)
+
+    # Vùng đọc rộng hơn bán kính kernel (0.76..0.99) nhưng tâm sao phải nằm hẳn trong góc [0.84*w.., 0.83*h..]
+    rx0 = int(w * 0.76)
+    ry0 = int(h * 0.75)
+    rx1 = w - 2
+    ry1 = h - 2
+    if rx1 - rx0 < 28 or ry1 - ry0 < 28:
+        return rgb_img
+
+    # Kích thước bán kính điển hình của ngôi sao Google Flow / Gemini (~0.042 * min(w, h))
+    base_r = max(12.0, min(42.0, min(w, h) * 0.042))
+    sub = gray[ry0:ry1, rx0:rx1]
+    sh, sw = sub.shape
+    min_cx = int(w * 0.84)
+    min_cy = int(h * 0.83)
+
+    best_score = 0.0
+    best_pt: Optional[Tuple[int, int, float]] = None
+
+    for r_try in (base_r * 0.72, base_r * 0.88, base_r, base_r * 1.18):
+        kr = int(math.ceil(r_try * 1.45))
+        if 2 * kr + 1 >= sh or 2 * kr + 1 >= sw:
+            continue
+        ky, kx = np.mgrid[-kr : kr + 1, -kr : kr + 1].astype(np.float32)
+        d = np.power(np.abs(kx) / r_try, 0.54) + np.power(np.abs(ky) / r_try, 0.54)
+        star_in = d <= 1.0
+        ring_out = (d > 1.08) & (d <= 1.55)
+        support = star_in | ring_out
+        n_in = int(star_in.sum())
+        n_out = int(ring_out.sum())
+        if n_in < 12 or n_out < 12:
+            continue
+
+        kern = np.zeros_like(ky, dtype=np.float32)
+        kern[star_in] = 1.0 / n_in
+        kern[ring_out] = -1.0 / n_out
+        k_zero = np.zeros_like(ky, dtype=np.float32)
+        k_zero[support] = np.where(star_in[support], 1.0, 0.0)
+        k_zero[support] -= k_zero[support].mean()
+        k_norm = float(np.sqrt((k_zero[support] ** 2).sum())) + 1e-6
+
+        win = np.lib.stride_tricks.sliding_window_view(sub, kern.shape)[::2, ::2]
+        diff_resp = np.einsum("ijkl,kl->ij", win, kern, optimize=True)
+        dot_resp = np.einsum("ijkl,kl->ij", win, k_zero, optimize=True)
+        win_sup = win[:, :, support]
+        sup_std = np.std(win_sup, axis=2) * math.sqrt(float(support.sum())) + 1e-6
+        pearson = dot_resp / (sup_std * k_norm)
+
+        yy_c, xx_c = np.mgrid[0 : pearson.shape[0], 0 : pearson.shape[1]]
+        cx_cand = rx0 + (xx_c * 2) + kr
+        cy_cand = ry0 + (yy_c * 2) + kr
+        in_corner = (cx_cand >= min_cx) & (cy_cand >= min_cy)
+        mask_cand = in_corner & (pearson >= 0.45) & (diff_resp >= 15.0)
+        if not np.any(mask_cand):
+            continue
+        score_map = np.where(mask_cand, pearson * np.minimum(diff_resp, 60.0), 0.0)
+        iy, ix = np.unravel_index(int(np.argmax(score_map)), score_map.shape)
+        peak_score = float(score_map[iy, ix])
+        if peak_score > best_score:
+            best_score = peak_score
+            best_pt = (rx0 + (ix * 2) + kr, ry0 + (iy * 2) + kr, float(r_try))
+
+    if best_pt is None or best_score <= 0.0:
+        return rgb_img
+
+    cx_best, cy_best, r_found = best_pt
+    r_pad = int(math.ceil(r_found * 1.65))
+    bx0 = max(0, cx_best - r_pad)
+    by0 = max(0, cy_best - r_pad)
+    bx1 = min(w, cx_best + r_pad + 1)
+    by1 = min(h, cy_best + r_pad + 1)
+
+    patch = arr_u8[by0:by1, bx0:bx1].astype(np.float32)
+    ph, pw = patch.shape[:2]
+    yy, xx = np.mgrid[by0:by1, bx0:bx1].astype(np.float32)
+    dx = np.abs(xx - cx_best)
+    dy = np.abs(yy - cy_best)
+
+    # Nới nhẹ mặt nạ sao ~20% + 2px để bao phủ sạch 100% mép khử răng cưa ở cả 4 chóp nhọn
+    r_mask = r_found * 1.24 + 2.0
+    astroid = (np.power(dx / r_mask, 0.54) + np.power(dy / r_mask, 0.54)) <= 1.0
+    inner_disc = (dx * dx + dy * dy) <= float((r_found * 0.45) ** 2)
+    mask = astroid | inner_disc
+
+    mask[:2, :] = False
+    mask[-2:, :] = False
+    mask[:, :2] = False
+    mask[:, -2:] = False
+
+    def _box_blur(arr2d: np.ndarray, rad: int) -> np.ndarray:
+        if rad <= 0:
+            return arr2d
+        p = np.pad(arr2d, ((rad, rad), (rad, rad)), mode="edge")
+        csx = np.pad(p.cumsum(axis=1), ((0, 0), (1, 0)), mode="constant")
+        hx = (csx[:, 2 * rad + 1 :] - csx[:, : -2 * rad - 1]) / float(2 * rad + 1)
+        csy = np.pad(hx.cumsum(axis=0), ((1, 0), (0, 0)), mode="constant")
+        return (csy[2 * rad + 1 :, :] - csy[: -2 * rad - 1, :]) / float(2 * rad + 1)
+
+    work = patch.copy()
+    valid_vals = work[~mask]
+    init_fill = np.median(valid_vals, axis=0) if valid_vals.size else np.array([20.0, 20.0, 20.0], dtype=np.float32)
+    work[mask] = init_fill
+
+    # Lấp đa tầng thô -> mịn (10 -> 5 -> 3 -> 1) giúp hội tụ tức thì trên toàn bộ lỗ sao không để lại quầng
+    for rad, iters in ((10, 8), (5, 8), (3, 8), (1, 6)):
+        for _ in range(iters):
+            for ch_idx in range(3):
+                blurred = _box_blur(work[:, :, ch_idx], rad)
+                work[:, :, ch_idx][mask] = blurred[mask]
+
+    # Bù hạt phim vi mô hòa theo kết cấu nền sạch xung quanh
+    if valid_vals.shape[0] > 20:
+        lum_orig = patch.mean(axis=2)
+        bg_smooth = _box_blur(lum_orig, 2)
+        hi_freq = (lum_orig - bg_smooth)[~mask]
+        grain_sigma = float(min(4.0, max(0.4, np.std(hi_freq) * 0.45)))
+        rng = np.random.default_rng(seed=(w * 10007 + h * 97 + cx_best))
+        grain = rng.normal(0.0, grain_sigma, size=(ph, pw, 1)).astype(np.float32)
+        work[mask] = np.clip(work[mask] + grain[mask], 0.0, 255.0)
+
+    out_arr = arr_u8.copy()
+    out_arr[by0:by1, bx0:bx1] = np.clip(np.rint(work), 0, 255).astype(np.uint8)
+    return Image.fromarray(out_arr, mode="RGB")
+
+
+def crop_flow_watermark(
+    img: Any,
+    *,
+    zoom_factor: float = DEFAULT_FLOW_WATERMARK_ZOOM,
+    remove_corner_sparkle: bool = True,
+) -> Any:
+    """Tự động crop zoom 1.04x (cắt mép phải/dưới ~3.85%) và dọn dấu thoi góc phải dưới cho ảnh AI từ Google Flow.
+
+    LƯU Ý AN TOÀN: CHỈ gọi trên ảnh AI mới tải từ Flow; tuyệt đối KHÔNG gọi trên ảnh tư liệu thật
+    trong `archive_sources.json`.
+    """
+    out = img
+    if remove_corner_sparkle:
+        out = _erase_flow_corner_sparkle(out)
+    z = float(zoom_factor)
+    w, h = out.size
+    if z > 1.0 and w >= 16 and h >= 16:
+        keep_w = max(2, min(w, int(round(w / z))))
+        keep_h = max(2, min(h, int(round(h / z))))
+        out = out.crop((0, 0, keep_w, keep_h))
+    return out
 
 
 def _parse_positive_int(val: Any) -> Optional[int]:
@@ -223,15 +425,89 @@ def load_archival_scene_ids(project_dir: Union[Path, str, None]) -> set[int]:
     return scene_ids
 
 
+def load_house_look_scene_ids(
+    project_dir: Union[Path, str, None],
+    *,
+    prefer_16x9: bool = False,
+) -> set[int]:
+    """Đọc tập scene_id đã được áp House Look V5.8 từ `pipeline_state.json` (hoặc `pipeline_state_16x9.json`).
+
+    Dùng để chống Double-Grading lúc render: cảnh AI đã có `house_look_applied: true` sẽ chạy chế độ
+    pass-through nhẹ (không giảm saturation, không dìm curves, không phủ thêm colorbalance hay noise lần 2).
+    """
+    if not project_dir:
+        return set()
+    base = Path(project_dir)
+    if base.is_file():
+        candidate_files = [base]
+    else:
+        is_16x9_dir = prefer_16x9 or (base.name == "assets_16x9")
+        names = (
+            ("pipeline_state_16x9.json", "pipeline_state.json", "house_look_scenes.json")
+            if is_16x9_dir
+            else ("pipeline_state.json", "house_look_scenes.json", "pipeline_state_16x9.json")
+        )
+        dirs = [base]
+        if base.name in ("assets", "assets_16x9", "raw_images", "raw_images_16x9") and base.parent != base:
+            dirs.append(base.parent)
+        candidate_files = [d / fn for d in dirs for fn in names]
+
+    scene_ids: set[int] = set()
+    for state_path in candidate_files:
+        if not state_path.is_file():
+            continue
+        try:
+            raw_text = state_path.read_text(encoding="utf-8-sig").strip()
+            if not raw_text:
+                continue
+            data = json.loads(raw_text)
+        except (OSError, ValueError):
+            continue
+
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    if item.get("house_look_applied") is True:
+                        sid = _parse_positive_int(item.get("id") or item.get("scene_id") or item.get("scene"))
+                        if sid is not None:
+                            scene_ids.add(sid)
+                else:
+                    sid = _parse_positive_int(item)
+                    if sid is not None:
+                        scene_ids.add(sid)
+        elif isinstance(data, dict):
+            hl_list = data.get("house_look_scenes")
+            if isinstance(hl_list, list):
+                for val in hl_list:
+                    sid = _parse_positive_int(val)
+                    if sid is not None:
+                        scene_ids.add(sid)
+            scenes_seq = data.get("scenes")
+            if isinstance(scenes_seq, list):
+                for item in scenes_seq:
+                    if isinstance(item, dict) and item.get("house_look_applied") is True:
+                        sid = _parse_positive_int(item.get("id") or item.get("scene_id") or item.get("scene"))
+                        if sid is not None:
+                            scene_ids.add(sid)
+        if scene_ids:
+            break
+    return scene_ids
+
+
 def build_ai_scene_depolish_vf(
     level: Union[str, bool, None],
     width: int = 1080,
     height: int = 1920,
+    *,
+    house_look_applied: bool = False,
 ) -> str:
-    """Tạo chuỗi filter khử bóng nhựa HDR nhẹ riêng cho cảnh tạo bằng AI.
+    """Tạo chuỗi filter V5.8 cho cảnh tạo bằng AI (tích hợp Double-Grading Guard).
 
-    Giữ độ nét gốc (không unsharp, không xoay toàn khung), chỉ hạ bão hòa nhẹ,
-    dìm highlights qua curves, scale+crop vi mô 3–4% và rải hạt phim siêu mịn.
+    - Khi `house_look_applied=False` (ảnh AI cũ chưa qua `house_look` V5.8): áp đầy đủ `DEPOLISH_SPECS`
+      (hqdn3d nhẹ, hạ bão hòa 0.44–0.62, curves low-key, colorbalance slate-blue, noise 35mm, vignette).
+    - Khi `house_look_applied=True` (ảnh AI mới đã qua `apply_house_look_to_image` V5.8 sau khi tải):
+      chuyển sang chế độ pass-through siêu nhẹ (chỉ scale+crop vi mô & vignette nhẹ, KHÔNG giảm saturation,
+      KHÔNG dìm curves, KHÔNG phủ thêm colorbalance hay noise lần 2).
     """
     lv = normalize_anti_ai_level(level)
     if lv == "off":
@@ -244,14 +520,26 @@ def build_ai_scene_depolish_vf(
     sh = max(h + 2, int(math.ceil((h * spec.scale_factor) / 2.0)) * 2)
     cx = (sw - w) // 2
     cy = (sh - h) // 2
-    return (
-        f"scale={sw}:{sh}:flags=lanczos,"
-        f"crop={w}:{h}:{cx}:{cy},"
-        f"setsar=1,"
-        f"eq=saturation={spec.saturation:.2f},"
-        f"{spec.curves},"
-        f"{spec.noise}"
-    )
+    parts = [
+        f"scale={sw}:{sh}:flags=lanczos",
+        f"crop={w}:{h}:{cx}:{cy}",
+        "setsar=1",
+    ]
+    if house_look_applied:
+        if spec.vignette:
+            parts.append(spec.vignette)
+        return ",".join(parts)
+
+    if spec.denoise:
+        parts.append(spec.denoise)
+    parts.append(f"eq=saturation={spec.saturation:.2f}")
+    parts.append(spec.curves)
+    if spec.colorbalance:
+        parts.append(spec.colorbalance)
+    parts.append(spec.noise)
+    if spec.vignette:
+        parts.append(spec.vignette)
+    return ",".join(parts)
 
 
 def normalize_anti_ai_level(level_or_bool: Union[str, bool, None]) -> str:

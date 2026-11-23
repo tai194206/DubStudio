@@ -222,15 +222,19 @@ def test_cli_dry_run_with_concurrency():
 
 
 def test_archival_photo_default_and_scene_override():
-    """Kiểm tra mặc định bật V5.4 toàn cục và ghi đè `archival_photo: False` cho từng cảnh trong 1 lượt chạy."""
+    """Kiểm tra mặc định bật V5.6 restored_doc_still toàn cục (era-agnostic) và ghi đè `archival_photo: False`."""
     diagram_sc = {
         "id": 1,
         "archival_photo": False,
-        "image_prompt": "Clean geological hillside cross-section diagram showing tunnel beneath fortress, vertical 9:16, no text",
+        "image_prompt": "Clean geological hillside cross-section diagram showing tunnel beneath ridge, vertical 9:16, no text",
     }
     battlefield_sc = {
         "id": 2,
-        "image_prompt": "Viet Minh soldiers advancing through mud trenches at dawn, vertical 9:16, no text",
+        "image_prompt": "Infantry soldiers advancing along a misty 1979 mountain outpost at dawn, vertical 9:16, no text",
+    }
+    daylight_sc = {
+        "id": 3,
+        "image_prompt": "Field artillery crew inside an earthen bunker checking brass watch light, vertical 9:16, no text",
     }
 
     assert flow_bot.should_apply_archival_photo(diagram_sc, global_archival_photo=True) is False
@@ -238,14 +242,76 @@ def test_archival_photo_default_and_scene_override():
     assert flow_bot.should_apply_archival_photo(diagram_sc, global_archival_photo=False) is False
     assert flow_bot.should_apply_archival_photo(battlefield_sc, global_archival_photo=False) is False
 
-    # Cùng 1 lượt chạy mặc định archival_photo=True: cảnh sơ đồ giữ nguyên, cảnh chiến trường áp chuẩn V5.4
+    # Cùng 1 lượt chạy mặc định restored_doc_still (V5.8 Unified House Look): sơ đồ giữ nguyên, chiến trường/ban ngày cùng tông cold slate-charcoal, không dính 1954 hay torchlight
     p_diag = flow_bot.prepare_image_prompt_for_scene(diagram_sc, "landscape_16_9").lower()
     p_bat = flow_bot.prepare_image_prompt_for_scene(battlefield_sc, "landscape_16_9").lower()
+    p_day = flow_bot.prepare_image_prompt_for_scene(daylight_sc, "landscape_16_9").lower()
     assert "16:9 widescreen" in p_diag
-    assert "war-correspondent photography" not in p_diag
-    assert "cleanly restored archival documentary war-correspondent photography" in p_bat
-    assert "deep gritty texture" in p_bat
+    assert "low-key dark archival" not in p_diag
+    assert "low-key dark archival war-correspondent documentary still with heavy bleach-bypass look" in p_bat
+    assert "unified deep dark slate-charcoal near-monochrome shadows" in p_bat
+    assert "heavy smoke-darkened overcast sky with desaturated cold slate-blue pre-dawn mist in the background, no bright white sky" in p_bat
+    assert "no planted torches unless explicitly requested" in p_bat
+    assert "torchlight" not in p_bat
+    assert "low-key dark archival documentary still with heavy silver-halide bleach-bypass look" in p_day
+    assert "unified cold slate-charcoal near-monochrome shadows across uniforms, stone, foliage, skin and mud" in p_day
+    assert "heavy smoke-darkened overcast sky with cool desaturated slate-blue atmospheric mist, no bright white sky" in p_day
+    assert "never selective yellow tint painted onto props or gear" in p_day
+    assert "1954" not in p_bat and "1954" not in p_day
 
-    # Tắt toàn cục (--no-archival-photo): không cảnh nào bị ép V5.4
+    # Tắt toàn cục (--no-archival-photo hoặc visual_preset="raw"): không cảnh nào bị tiêm hậu tố V5.8
     p_bat_off = flow_bot.prepare_image_prompt_for_scene(battlefield_sc, "landscape_16_9", archival_photo=False).lower()
-    assert "war-correspondent photography" not in p_bat_off
+    p_bat_raw = flow_bot.prepare_image_prompt_for_scene(battlefield_sc, "landscape_16_9", visual_preset="raw").lower()
+    assert "low-key dark archival" not in p_bat_off
+    assert "low-key dark archival" not in p_bat_raw
+
+
+def test_process_flow_downloaded_image_auto_crop_and_archival_guard(tmp_path):
+    """Auto-crop 1.04x & House Look V5.8 chỉ chạy cho ảnh AI; ảnh thuộc archive_sources.json giữ nguyên từng pixel."""
+    from PIL import Image
+    import numpy as np
+    from core.house_look import measure_house_look_profile
+
+    dl_file = tmp_path / "dl.png"
+    rng = np.random.default_rng(12345)
+    arr = rng.integers(85, 135, size=(600, 1000, 3), dtype=np.uint8)
+    Image.fromarray(arr, mode="RGB").save(dl_file, format="PNG")
+    assert dl_file.stat().st_size > 10 * 1024
+
+    # Cảnh AI (id=2 không thuộc archival_ids) -> crop 1.04x (1000x600 -> 962x577) + House Look V5.8 LAB match
+    ai_png = tmp_path / "raw_images" / "002.png"
+    ai_jpg = tmp_path / "assets" / "002.jpg"
+    out_w, out_h = flow_bot.process_flow_downloaded_image(
+        dl_file,
+        ai_png,
+        dst_jpg=ai_jpg,
+        frame_preset="landscape_16_9",
+        scene_id=2,
+        archival_scene_ids={1},
+        strip_flow_watermark=True,
+        zoom_factor=1.04,
+        apply_house_look=True,
+    )
+    assert (out_w, out_h) == (1920, 1080)
+    with Image.open(ai_png) as im_ai:
+        assert im_ai.size == (962, 577)
+        prof_ai = measure_house_look_profile(im_ai)
+        assert prof_ai.b_mean < -2.0
+        assert prof_ai.cool_index > 4.0
+
+    # Cảnh tư liệu thật (id=1 thuộc archival_ids) -> miễn crop & miễn House Look trên đĩa, giữ nguyên 1000x600 từng pixel
+    arch_png = tmp_path / "raw_images" / "001.png"
+    flow_bot.process_flow_downloaded_image(
+        dl_file,
+        arch_png,
+        dst_jpg=None,
+        frame_preset="landscape_16_9",
+        scene_id=1,
+        archival_scene_ids={1},
+        strip_flow_watermark=True,
+        zoom_factor=1.04,
+        apply_house_look=True,
+    )
+    with Image.open(arch_png) as im_arch:
+        assert im_arch.size == (1000, 600)
+        assert np.array_equal(np.asarray(im_arch, dtype=np.uint8), arr)

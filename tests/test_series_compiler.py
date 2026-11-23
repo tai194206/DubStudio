@@ -316,13 +316,15 @@ def test_build_youtube_16x9_scene_vf_smart_and_selective_anti_ai(tmp_path):
     assert "1920:1080" in vf_land
     assert "curves=" in vf_land and "noise=" in vf_land
 
-    # Cảnh tư liệu thật phải được miễn lọc khử bóng Anti-AI hoàn toàn
+    # Cảnh tư liệu thật phải được miễn lọc khử bóng Anti-AI hoàn toàn (no curves/noise), chỉ hòa tông ~15% non-destructive & nền mờ phủ lạnh V5.8
     vf_port_archival = build_youtube_16x9_scene_vf(
         port_img, duration=1.0, layout_mode="smart", is_archival=True, anti_ai_level="strong"
     )
     assert "split=2[bg][fg]" in vf_port_archival
     assert "gblur=" in vf_port_archival
     assert "eq=brightness=-0.22:saturation=0.75" in vf_port_archival
+    assert "colorbalance=rs=-0.05:gs=-0.01:bs=0.07" in vf_port_archival
+    assert "eq=contrast=1.04:brightness=-0.02" in vf_port_archival
     assert "overlay=(W-w)/2:(H-h)/2" in vf_port_archival
     assert "curves=" not in vf_port_archival
     assert "noise=" not in vf_port_archival

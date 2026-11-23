@@ -1256,8 +1256,9 @@ def test_story_pipeline_selective_ai_filter(tmp_path, monkeypatch):
 
     run_ffmpeg(["-f", "lavfi", "-i", "color=c=0x888888:s=720x1280:d=1", "-vframes", "1", str(assets_dir / "001.jpg")])
     run_ffmpeg(["-f", "lavfi", "-i", "color=c=0x446688:s=720x1280:d=1", "-vframes", "1", str(assets_dir / "002.png")])
+    run_ffmpeg(["-f", "lavfi", "-i", "color=c=0x334455:s=720x1280:d=1", "-vframes", "1", str(assets_dir / "003.jpg")])
 
-    # Cảnh 1 là ảnh tư liệu thật từ archive_sources.json; Cảnh 2 là cảnh AI
+    # Cảnh 1 là ảnh tư liệu thật từ archive_sources.json; Cảnh 2 là AI cũ; Cảnh 3 là AI đã qua House Look V5.8
     (ep_dir / "archive_sources.json").write_text(
         json.dumps(
             {
@@ -1276,6 +1277,20 @@ def test_story_pipeline_selective_ai_filter(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
+    (ep_dir / "pipeline_state.json").write_text(
+        json.dumps(
+            {
+                "title": "Selective_AntiAI_Test",
+                "scenes": [
+                    {"id": 1, "image_status": "done", "house_look_applied": False},
+                    {"id": 2, "image_status": "done", "house_look_applied": False},
+                    {"id": 3, "image_status": "done", "house_look_applied": True},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
     sb_file = ep_dir / "storyboard.json"
     sb_file.write_text(
@@ -1284,7 +1299,8 @@ def test_story_pipeline_selective_ai_filter(tmp_path, monkeypatch):
                 "title": "Selective_AntiAI_Test",
                 "scenes": [
                     {"id": 1, "speech": "Ảnh tư liệu lịch sử thật.", "motion": "zoom_in", "sfx": "none"},
-                    {"id": 2, "speech": "Cảnh tái hiện bằng AI.", "motion": "pan_left", "sfx": "none"},
+                    {"id": 2, "speech": "Cảnh tái hiện bằng AI cũ.", "motion": "pan_left", "sfx": "none"},
+                    {"id": 3, "speech": "Cảnh AI đã qua House Look V5.8.", "motion": "zoom_out", "sfx": "none"},
                 ],
             },
             ensure_ascii=False,
@@ -1326,24 +1342,43 @@ def test_story_pipeline_selective_ai_filter(tmp_path, monkeypatch):
 
     cmd_c1 = next(c for c in recorded_cmds if any(a.endswith("clip_001.mp4") for a in c))
     cmd_c2 = next(c for c in recorded_cmds if any(a.endswith("clip_002.mp4") for a in c))
+    cmd_c3 = next(c for c in recorded_cmds if any(a.endswith("clip_003.mp4") for a in c))
     cmd_mix = next(c for c in recorded_cmds if any(a.endswith("out_selective.mp4") for a in c))
 
     vf_c1 = cmd_c1[cmd_c1.index("-vf") + 1]
     vf_c2 = cmd_c2[cmd_c2.index("-vf") + 1]
+    vf_c3 = cmd_c3[cmd_c3.index("-vf") + 1]
     fc_mix = cmd_mix[cmd_mix.index("-filter_complex") + 1]
 
-    # Cảnh 1 (tư liệu thật): giữ nét gốc 100%, KHÔNG áp bộ lọc khử bóng AI
+    # Cảnh 1 (tư liệu thật): KHÔNG dùng lọc AI depolish/crop/curves/grain; chỉ hòa tông nhẹ ~15% non-destructive lúc render
     assert "curves=" not in vf_c1
     assert "eq=saturation=" not in vf_c1
     assert "noise=" not in vf_c1
+    assert "vignette=" not in vf_c1
+    assert "hqdn3d=" not in vf_c1
     assert "unsharp" not in vf_c1
+    assert "eq=contrast=1.04:brightness=-0.02" in vf_c1
+    assert "colorbalance=rs=-0.018:gs=0.00:bs=0.026" in vf_c1
 
-    # Cảnh 2 (AI): CÓ áp lọc khử bóng HDR nhẹ và KHÔNG dùng unsharp
-    assert "eq=saturation=0.95" in vf_c2
-    assert "curves=all='0/0 0.5/0.5 0.85/0.77 1/0.88'" in vf_c2
-    assert "noise=alls=6:allf=t+u" in vf_c2
+    # Cảnh 2 (AI cũ chưa qua house_look): CÓ áp House Look V5.8 Bleach-Bypass đầy đủ và KHÔNG dùng unsharp
+    assert "hqdn3d=0.8:0.6:1.5:1.2" in vf_c2
+    assert "eq=saturation=0.52" in vf_c2
+    assert "curves=all='0/0 0.25/0.20 0.5/0.45 0.85/0.82 1/0.95'" in vf_c2
+    assert "colorbalance=rs=-0.04:gs=0.00:bs=0.06:rm=-0.03:gm=0.00:bm=0.05:rh=0.02:gh=0.01:bh=-0.01" in vf_c2
+    assert "noise=alls=7:allf=t+u" in vf_c2
+    assert "vignette=PI/6" in vf_c2
     assert "crop=1080:1920:" in vf_c2
     assert "unsharp" not in vf_c2
+
+    # Cảnh 3 (AI mới đã qua house_look_applied=True): Chế độ pass-through chống Double-Grading
+    assert "crop=1080:1920:" in vf_c3
+    assert "vignette=PI/6" in vf_c3
+    assert "eq=saturation=" not in vf_c3
+    assert "curves=" not in vf_c3
+    assert "colorbalance=" not in vf_c3
+    assert "noise=" not in vf_c3
+    assert "hqdn3d=" not in vf_c3
+    assert "unsharp" not in vf_c3
 
     # Mix cuối: KHÔNG làm đục hình toàn cục hay cắt/echo giọng, vẫn đốt ASS & giữ -map_metadata -1
     assert "rotate=" not in fc_mix

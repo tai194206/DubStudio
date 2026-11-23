@@ -28,8 +28,10 @@ from pysubs2 import Alignment, Color, SSAEvent, SSAFile, SSAStyle
 
 from .anti_ai_filter import (
     build_ai_scene_depolish_vf,
+    build_archival_harmonize_vf,
     get_clean_metadata_flags,
     load_archival_scene_ids,
+    load_house_look_scene_ids,
     normalize_anti_ai_level,
 )
 from .audio_track import SR, fade_edges, read_wav, write_wav
@@ -1440,6 +1442,7 @@ class StoryPipeline:
         self.rep.log(f"✓ Đã khớp đủ {len(asset_map)} tài nguyên media.", "ok")
 
         archival_ids: set[int] = set()
+        house_look_ids: set[int] = set()
         if anti_ai_active:
             candidate_dirs: List[Path] = []
             if isinstance(storyboard_path_or_obj, (Path, str)):
@@ -1452,26 +1455,49 @@ class StoryPipeline:
                 archival_ids = load_archival_scene_ids(pdir)
                 if archival_ids:
                     break
+            prefer_16x9 = (fp.name == "landscape_16_9") or (resolved_assets.name == "assets_16x9")
+            for pdir in candidate_dirs:
+                house_look_ids = load_house_look_scene_ids(pdir, prefer_16x9=prefer_16x9)
+                if house_look_ids:
+                    break
 
         per_scene_anti_ai = anti_ai_active
         ai_depolish_vf = (
-            build_ai_scene_depolish_vf(eff_anti_ai_level, width=fp.inner_w, height=fp.inner_h)
+            build_ai_scene_depolish_vf(
+                eff_anti_ai_level,
+                width=fp.inner_w,
+                height=fp.inner_h,
+                house_look_applied=False,
+            )
             if per_scene_anti_ai
             else ""
         )
+        ai_passthrough_vf = (
+            build_ai_scene_depolish_vf(
+                eff_anti_ai_level,
+                width=fp.inner_w,
+                height=fp.inner_h,
+                house_look_applied=True,
+            )
+            if per_scene_anti_ai
+            else ""
+        )
+        archival_harmonize_vf = build_archival_harmonize_vf(True) if per_scene_anti_ai else ""
         if per_scene_anti_ai:
             n_archival = sum(1 for sc in sb.scenes if sc.id in archival_ids)
-            n_ai = len(sb.scenes) - n_archival
+            n_hl = sum(1 for sc in sb.scenes if (sc.id not in archival_ids) and (sc.id in house_look_ids))
+            n_ai_legacy = len(sb.scenes) - n_archival - n_hl
+            hl_note = f" | Pass-through chống Double-Grading cho {n_hl} cảnh đã qua House Look V5.8" if n_hl else ""
             if archival_ids:
                 self.rep.log(
-                    f"🛡️ [Anti-AI Selective] Giữ nét gốc {n_archival} cảnh tư liệu thật "
-                    f"| Áp lọc khử bóng nhẹ (mức={eff_anti_ai_level}, {fp.inner_w}x{fp.inner_h}) cho {n_ai} cảnh AI.",
+                    f"🛡️ [Anti-AI Selective] Hòa tông nhẹ ~15% lúc render cho {n_archival} cảnh tư liệu thật "
+                    f"(file gốc & SHA-256 nguyên vẹn){hl_note} | Áp House Look V5.8 (mức={eff_anti_ai_level}, {fp.inner_w}x{fp.inner_h}) cho {n_ai_legacy} cảnh AI.",
                     "info",
                 )
             else:
                 self.rep.log(
-                    f"🛡️ [Anti-AI Per-Scene] Áp lọc khử bóng nhẹ từng cảnh (mức={eff_anti_ai_level}, {fp.inner_w}x{fp.inner_h}) "
-                    f"cho {n_ai} cảnh AI (0 ảnh tư liệu thật; giữ sạch giọng đọc & phụ đề).",
+                    f"🛡️ [Anti-AI Per-Scene] Áp House Look V5.8 từng cảnh (mức={eff_anti_ai_level}, {fp.inner_w}x{fp.inner_h}) "
+                    f"cho {n_ai_legacy} cảnh AI{hl_note} (0 ảnh tư liệu thật; giữ sạch giọng đọc & phụ đề).",
                     "info",
                 )
         self.rep.check_cancel()
@@ -1852,9 +1878,15 @@ class StoryPipeline:
 
                 is_video = asset_file.suffix.lower() in ASSET_VIDEO_EXTS
                 run_has_archival = any(sid in archival_ids for sid in (r.shot_ids or []))
+                run_has_house_look = any(sid in house_look_ids for sid in (r.shot_ids or []))
                 run_extra_parts = []
-                if per_scene_anti_ai and not run_has_archival and ai_depolish_vf:
-                    run_extra_parts.append(ai_depolish_vf)
+                if per_scene_anti_ai:
+                    if run_has_archival and archival_harmonize_vf:
+                        run_extra_parts.append(archival_harmonize_vf)
+                    elif run_has_house_look and ai_passthrough_vf:
+                        run_extra_parts.append(ai_passthrough_vf)
+                    elif (not run_has_archival) and ai_depolish_vf:
+                        run_extra_parts.append(ai_depolish_vf)
                 if per_scene_grade_vf:
                     run_extra_parts.append(per_scene_grade_vf)
                 run_extra_vf = ",".join(run_extra_parts)
@@ -1907,8 +1939,13 @@ class StoryPipeline:
 
                 is_video = (sc.asset_type == "flow_video") or (asset_file.suffix.lower() in ASSET_VIDEO_EXTS)
                 scene_extra_parts = []
-                if per_scene_anti_ai and (sc.id not in archival_ids) and ai_depolish_vf:
-                    scene_extra_parts.append(ai_depolish_vf)
+                if per_scene_anti_ai:
+                    if (sc.id in archival_ids) and archival_harmonize_vf:
+                        scene_extra_parts.append(archival_harmonize_vf)
+                    elif (sc.id in house_look_ids) and ai_passthrough_vf:
+                        scene_extra_parts.append(ai_passthrough_vf)
+                    elif (sc.id not in archival_ids) and ai_depolish_vf:
+                        scene_extra_parts.append(ai_depolish_vf)
                 if per_scene_grade_vf:
                     scene_extra_parts.append(per_scene_grade_vf)
                 scene_extra_vf = ",".join(scene_extra_parts)

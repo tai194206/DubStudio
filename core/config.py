@@ -28,6 +28,11 @@ DEFAULT_GEMINI_MODELS = FALLBACK_MODELS
 VALID_TRANSITIONS = ("none", "fade", "dissolve", "smoothleft", "wipeleft")
 VALID_WATERMARK_POS = ("top_left", "top_right", "bottom_left")
 VALID_ANTI_AI_LEVELS = ("off", "light", "medium", "strong")
+DEFAULT_VISUAL_PRESET = "restored_doc_still"
+VALID_VISUAL_PRESETS = ("restored_doc_still", "raw")
+DEFAULT_FLOW_WATERMARK_ZOOM = 1.04
+DEFAULT_HOUSE_LOOK_STRENGTH = 0.64
+DEFAULT_TOP_ND_STRENGTH = 0.20
 
 
 def load_env() -> None:
@@ -110,6 +115,12 @@ class DubSettings:
     story_anti_ai: bool = True
     story_anti_ai_level: str = "medium"         # off | light | medium | strong
     story_anti_ai_grain: bool = True            # hạt phim & tối góc nhẹ (Film Grain / Vignette)
+    story_visual_preset: str = DEFAULT_VISUAL_PRESET  # restored_doc_still | raw (mặc định toàn hệ thống V5.8)
+    story_flow_watermark_crop: bool = True      # tự động crop zoom 1.04x xóa watermark Google Flow góc phải dưới cho ảnh AI mới tải
+    story_flow_watermark_zoom: float = DEFAULT_FLOW_WATERMARK_ZOOM
+    story_house_look_enabled: bool = True       # đồng bộ tông màu House Look V5.8 (soft LAB matching + ND trời + unified grain)
+    story_house_look_strength: float = DEFAULT_HOUSE_LOOK_STRENGTH
+    story_top_nd_strength: float = DEFAULT_TOP_ND_STRENGTH
     story_codec: str = "h264"
     story_bgm_volume: float = 0.28
     story_sfx_volume: float = 0.85
@@ -171,6 +182,23 @@ class DubSettings:
             s.story_anti_ai = s.story_anti_ai_level != "off"
             raw_fp = str(getattr(s, "story_frame_preset", "auto") or "auto").strip().lower()
             s.story_frame_preset = raw_fp if raw_fp in VALID_FRAME_PRESET_SETTINGS else "auto"
+            raw_vp = str(getattr(s, "story_visual_preset", DEFAULT_VISUAL_PRESET) or DEFAULT_VISUAL_PRESET).strip().lower()
+            s.story_visual_preset = raw_vp if raw_vp in VALID_VISUAL_PRESETS else DEFAULT_VISUAL_PRESET
+            try:
+                zw = float(getattr(s, "story_flow_watermark_zoom", DEFAULT_FLOW_WATERMARK_ZOOM))
+            except (TypeError, ValueError):
+                zw = DEFAULT_FLOW_WATERMARK_ZOOM
+            s.story_flow_watermark_zoom = max(1.0, min(1.15, zw))
+            try:
+                hls = float(getattr(s, "story_house_look_strength", DEFAULT_HOUSE_LOOK_STRENGTH))
+            except (TypeError, ValueError):
+                hls = DEFAULT_HOUSE_LOOK_STRENGTH
+            s.story_house_look_strength = max(0.0, min(0.85, hls))
+            try:
+                nds = float(getattr(s, "story_top_nd_strength", DEFAULT_TOP_ND_STRENGTH))
+            except (TypeError, ValueError):
+                nds = DEFAULT_TOP_ND_STRENGTH
+            s.story_top_nd_strength = max(0.0, min(0.35, nds))
         except (OSError, ValueError):
             pass
         return s

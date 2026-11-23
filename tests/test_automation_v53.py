@@ -747,33 +747,45 @@ def test_validate_storyboard_accepts_optional_chapter_title_and_is_cta(tmp_path)
     assert all_errors == []
     assert validate_storyboard.main([str(sb_path)]) == 0
 
-    # Giá trị sai kiểu cho chapter_title / is_cta phải bị Tầng 1 báo lỗi
+    # Giá trị sai kiểu cho chapter_title / is_cta / look_reference phải bị Tầng 1 báo lỗi
     bad_sb = json.loads(json.dumps(sb))
     bad_sb["chapter_title"] = 123
+    bad_sb["look_reference"] = True
     bad_sb["scenes"][1]["is_cta"] = "yes"
     bad_path = ep_dir / "storyboard_bad.json"
     bad_path.write_text(json.dumps(bad_sb, ensure_ascii=False, indent=2), encoding="utf-8")
     bad_reports, _, _ = validate_storyboard.validate_storyboard(bad_path)
     t1_errors = bad_reports[0].errors
     assert any("chapter_title" in err for err in t1_errors)
+    assert any("look_reference" in err for err in t1_errors)
     assert any("is_cta" in err for err in t1_errors)
 
 
 def test_adapt_prompt_for_archival_photo_v54(tmp_path, monkeypatch):
+    """Kiểm chứng bộ tiêm prompt V5.8 Unified Cold Slate-Charcoal House Look (`restored_doc_still`)."""
     import run_episode
 
     day_2d = (
-        "Dramatic high-angle view of Muong Thanh valley in 1953, "
+        "Soldiers hauling field artillery up a rocky limestone mountain trail in 1979, "
+        "black and white monochrome grayscale sepia, yellowed paper border, vintage frame, blurry low-res, "
         "epic 2D historical animation style, clean delicate lineart, rich cinematic cel-shading, "
         "Kodachrome colorized glow, warm sunlight rays, golden hour, teal-and-orange, cinematic bokeh, "
-        "warm dramatic lighting, moody blue and warm sunset contrast, vertical 9:16, no text"
+        "warm dramatic lighting, moody blue and warm sunset contrast, vertical 9:16, no white borders, no text, no letters, no watermark"
     )
     out_day = flow_bot.adapt_prompt_for_archival_photo(
         flow_bot.adapt_prompt_for_frame_preset(day_2d, "landscape_16_9")
     )
     low_day = out_day.lower()
-    cleaned_head = low_day.split("authentic 1954 indochina")[0]
+    cleaned_head = low_day.split("low-key dark archival documentary still")[0]
     for banned in (
+        "black and white",
+        "monochrome",
+        "grayscale",
+        "sepia",
+        "yellowed paper border",
+        "vintage frame",
+        "blurry",
+        "low-res",
         "2d historical animation",
         "cel-shading",
         "lineart",
@@ -786,54 +798,81 @@ def test_adapt_prompt_for_archival_photo_v54(tmp_path, monkeypatch):
         "cinematic bokeh",
     ):
         assert banned not in cleaned_head
-    for banned_global in (
-        "kodachrome",
-        "colorized",
-        "warm sunlight rays",
-        "cinematic bokeh",
-        "cel-shading",
-        "lineart",
-    ):
-        assert banned_global not in low_day
-    assert "no 2d illustration" in low_day
+
+    for banned_full in ("black and white", "grayscale", "sepia", "kodachrome", "golden hour", "teal-and-orange"):
+        assert banned_full not in low_day
+
+    assert "1979" in low_day
+    assert "1954" not in low_day
+    assert "viet minh" not in low_day
     assert "16:9 widescreen" in low_day
-    assert "authentic 1954 indochina archival documentary photograph" in low_day
-    assert "cleanly restored archival documentary war-correspondent photography" in low_day
-    assert "raw 35mm monochrome / near-monochrome film grain" in low_day
-    assert "stark authentic natural lighting" in low_day
-    assert "deep gritty texture" in low_day
-    assert "no modern cinematic color grading" in low_day
-    assert "no golden hour glow" in low_day
-    assert "no teal-and-orange" in low_day
-    assert "no glossy ai sheen" in low_day
-    assert "no fake scan frame" in low_day
-    assert "no pillarbox" in low_day
-    assert "no letterbox" in low_day
-    assert low_day.endswith("no text")
+    assert "low-key dark archival documentary still with heavy silver-halide bleach-bypass look" in low_day
+    assert "unified cold slate-charcoal near-monochrome shadows across uniforms, stone, foliage, skin and mud" in low_day
+    assert "heavy smoke-darkened overcast sky with cool desaturated slate-blue atmospheric mist, no bright white sky" in low_day
+    assert "never selective yellow tint painted onto props or gear" in low_day
+    assert "no bright full color, no vivid green foliage, no rosy skin tones" in low_day
+    assert "coarse tactile 35mm tri-x analog film grain and subtle archival micro-scratches" in low_day
+    assert low_day.endswith("edge-to-edge full-bleed, no borders, no text, no letters, no watermark")
 
     night_2d = (
-        "Porters pushing cargo bicycles uphill with glowing bamboo torches at night, "
+        "Border outpost crew guarding a dark mountain pass at night in 1979, "
         "cinematic historical documentary 2D semi-realistic painted illustration, "
-        "fine painterly brushstrokes, dramatic rim lighting, no text, no watermark"
+        "fine painterly brushstrokes, dramatic rim lighting, monochrome, no text, no watermark"
     )
     out_night = flow_bot.adapt_prompt_for_archival_photo(night_2d)
     low_night = out_night.lower()
+    cleaned_night_head = low_night.split("low-key dark archival war-correspondent documentary still")[0]
     assert "painted illustration" not in low_night
     assert "painterly brushstrokes" not in low_night
     assert "dramatic rim lighting" not in low_night
-    assert "archival documentary night photograph" in low_night
-    assert "high-iso raw 35mm monochrome / near-monochrome film grain" in low_night
-    assert "natural dim torchlight contrast" in low_night
-    assert "deep gritty texture" in low_night
+    assert "monochrome" not in cleaned_night_head
+    assert "torchlight" not in low_night
+    assert "1954" not in low_night
+    assert "low-key dark archival war-correspondent documentary still with heavy bleach-bypass look" in low_night
+    assert "unified deep dark slate-charcoal near-monochrome shadows" in low_night
+    assert "heavy smoke-darkened overcast sky with desaturated cold slate-blue pre-dawn mist in the background, no bright white sky" in low_night
+    assert "no planted torches unless explicitly requested" in low_night
+    assert low_night.endswith("edge-to-edge full-bleed, no borders, no text, no letters, no watermark")
 
-    # Mặc định CLI phải BẬT archival_photo=True và hỗ trợ tắt bằng --no-archival-photo
+    # Ưu tiên mood ban ngày: prompt vừa có overcast/morning vừa có battle PHẢI chọn daylight (trừ khi có night/pre-dawn/dusk rõ ràng)
+    assert (
+        flow_bot.detect_scene_lighting_mood(
+            "Infantry column advancing through battle smoke at overcast morning, vertical 9:16"
+        )
+        == "daylight"
+    )
+    assert (
+        flow_bot.detect_scene_lighting_mood(
+            "Infantry runners inside muddy battle trench at night, vertical 9:16"
+        )
+        == "night_battle"
+    )
+
+    # Giữ nguyên cụm hybrid V5.7/V5.8 trong prompt gốc (KHÔNG bị _ARCHIVAL_STRIP_PATTERNS xóa nhầm)
+    hybrid_src = (
+        "Highland supply column at morning, heavy bleach-bypass, low-key charcoal black-and-white, "
+        "near-monochrome tones, vertical 9:16, no text"
+    )
+    hybrid_out = flow_bot.adapt_prompt_for_archival_photo(hybrid_src).lower()
+    hybrid_head = hybrid_out.split("low-key dark archival documentary still")[0]
+    assert "heavy bleach-bypass" in hybrid_head
+    assert "charcoal black-and-white" in hybrid_head
+    assert "near-monochrome" in hybrid_head
+
+    # Mặc định CLI phải BẬT archival_photo=True (V5.7 restored_doc_still) và hỗ trợ tắt bằng --no-archival-photo hoặc --visual-preset raw
     fb_default_args = flow_bot.build_arg_parser().parse_args([str(tmp_path / "storyboard.json"), "--mode", "images"])
     assert fb_default_args.archival_photo is True
+    assert fb_default_args.visual_preset is None
 
     fb_off_args = flow_bot.build_arg_parser().parse_args(
         [str(tmp_path / "storyboard.json"), "--mode", "images", "--no-archival-photo"]
     )
     assert fb_off_args.archival_photo is False
+
+    fb_raw_args = flow_bot.build_arg_parser().parse_args(
+        [str(tmp_path / "storyboard.json"), "--mode", "images", "--visual-preset", "raw"]
+    )
+    assert fb_raw_args.visual_preset == "raw"
 
     re_default_args = run_episode.build_arg_parser().parse_args([str(tmp_path), "--phase", "images"])
     assert re_default_args.archival_photo is True
@@ -843,7 +882,7 @@ def test_adapt_prompt_for_archival_photo_v54(tmp_path, monkeypatch):
     )
     assert re_off_args.archival_photo is False
 
-    # Ghi đè theo từng cảnh: "archival_photo": false bỏ qua bộ lọc V5.4, cảnh thường vẫn áp V5.4
+    # Ghi đè theo từng cảnh: "archival_photo": false bỏ qua bộ lọc V5.7, cảnh thường vẫn áp V5.7
     diagram_scene = {
         "id": 1,
         "archival_photo": False,
@@ -851,7 +890,7 @@ def test_adapt_prompt_for_archival_photo_v54(tmp_path, monkeypatch):
     }
     combat_scene = {
         "id": 2,
-        "image_prompt": "Viet Minh soldiers advancing through misty trenches at dawn, vertical 9:16, no text",
+        "image_prompt": "Border defenders advancing through misty trenches at dawn in 1979, vertical 9:16, no text",
     }
     assert flow_bot.should_apply_archival_photo(diagram_scene, global_archival_photo=True) is False
     assert flow_bot.should_apply_archival_photo(combat_scene, global_archival_photo=True) is True
@@ -859,11 +898,11 @@ def test_adapt_prompt_for_archival_photo_v54(tmp_path, monkeypatch):
 
     diagram_prompt = flow_bot.prepare_image_prompt_for_scene(diagram_scene, "portrait_9_16", archival_photo=True).lower()
     combat_prompt = flow_bot.prepare_image_prompt_for_scene(combat_scene, "portrait_9_16", archival_photo=True).lower()
-    assert "war-correspondent photography" not in diagram_prompt
+    assert "low-key dark archival" not in diagram_prompt
     assert "geological tunnel cross-section diagram" in diagram_prompt
-    assert "war-correspondent photography" in combat_prompt
+    assert "low-key dark archival" in combat_prompt
 
-    # Xác nhận run_phase_images(..., archival_photo=False) truyền đúng cờ --no-archival-photo xuống flow_bot.py
+    # Xác nhận run_phase_images(..., archival_photo=False) & visual_preset="raw" truyền đúng cờ xuống flow_bot.py
     ep_dir = tmp_path / "Ep_Forward_Test"
     ep_dir.mkdir()
     sb_path = ep_dir / "storyboard.json"
@@ -890,6 +929,105 @@ def test_adapt_prompt_for_archival_photo_v54(tmp_path, monkeypatch):
         scenes_arg=None,
         dry_run=True,
         cdp_url=None,
+        visual_preset="raw",
+    )
+    assert "--no-archival-photo" in captured_cmds[-1]
+    assert "--visual-preset" in captured_cmds[-1] and "raw" in captured_cmds[-1]
+
+    run_episode.run_phase_images(
+        ep_dir,
+        sb_path,
+        scenes_arg=None,
+        dry_run=True,
+        cdp_url=None,
     )
     assert "--archival-photo" in captured_cmds[-1]
     assert "--no-archival-photo" not in captured_cmds[-1]
+
+
+def test_validator_v56_visual_preset_and_monochrome_warning(tmp_path):
+    """Validator V5.7 ưu tiên restored_doc_still, cảnh báo nhẹ prompt ép đen trắng phẳng cũ nhưng không cảnh báo cụm hybrid V5.7 hay ảnh thật / allow_monochrome."""
+    ep_dir = tmp_path / "Ep_V56_Validate"
+    ep_dir.mkdir()
+    (ep_dir / "archive_sources.json").write_text(
+        json.dumps({"episode": "Test", "assets": {"001": {"scene_id": 1}}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    sb = {
+        "version": "3.0",
+        "title": "Test_1979_V58",
+        "visual_preset": "restored_doc_still",
+        "look_reference": "008",
+        "frame_preset": "landscape_16_9",
+        "aspect_ratio": "16:9",
+        "asset_ratio_tier": "0_100",
+        "locations": {"loc_001": "001.jpg", "loc_002": "002.jpg", "loc_003": "003.jpg", "loc_004": "004.jpg"},
+        "full_script_for_elevenlabs": "Câu một mở đầu kịch tính ngắn gọn. Câu hai giải thích bối cảnh rõ ràng. Câu ba chuyển mạch cảm xúc chân thực. Câu bốn kết lại ý nghĩa sâu sắc.",
+        "beats": [
+            {"id": 1, "text": "Câu một mở đầu kịch tính ngắn gọn.", "location": "loc_001", "intensity": 3, "intent": "establish", "sfx": "boom"},
+            {"id": 2, "text": "Câu hai giải thích bối cảnh rõ ràng.", "location": "loc_002", "intensity": 2, "intent": "explain", "sfx": "none"},
+            {"id": 3, "text": "Câu ba chuyển mạch cảm xúc chân thực.", "location": "loc_003", "intensity": 2, "intent": "reveal", "sfx": "whoosh"},
+            {"id": 4, "text": "Câu bốn kết lại ý nghĩa sâu sắc.", "location": "loc_004", "intensity": 2, "intent": "emotion", "sfx": "none"},
+        ],
+        "scenes": [
+            {
+                "id": 1,
+                "speech": "Câu một mở đầu kịch tính ngắn gọn.",
+                "on_screen_text": "MỐC LỊCH SỬ",
+                "asset_type": "static_image",
+                "motion": "zoom_in",
+                "ken_burns": "zoom_in",
+                "sfx": "boom",
+                "image_prompt": "Archival monochrome press photo description, 16:9 widescreen framing, no text",
+                "motion_prompt": "",
+            },
+            {
+                "id": 2,
+                "speech": "Câu hai giải thích bối cảnh rõ ràng.",
+                "on_screen_text": "DIỄN BIẾN CHÍNH",
+                "asset_type": "static_image",
+                "motion": "pan_right",
+                "ken_burns": "pan_right",
+                "sfx": "none",
+                "image_prompt": "Soldiers marching along rocky ridge in black and white, 16:9 widescreen framing, no text",
+                "motion_prompt": "",
+            },
+            {
+                "id": 3,
+                "speech": "Câu ba chuyển mạch cảm xúc chân thực.",
+                "on_screen_text": "CHỨNG TÍCH GỐC",
+                "asset_type": "static_image",
+                "motion": "zoom_out",
+                "ken_burns": "zoom_out",
+                "sfx": "whoosh",
+                "allow_monochrome": True,
+                "image_prompt": "Mountain pass mist in monochrome film grain, 16:9 widescreen framing, no text",
+                "motion_prompt": "",
+            },
+            {
+                "id": 4,
+                "speech": "Câu bốn kết lại ý nghĩa sâu sắc.",
+                "on_screen_text": "DI SẢN BỀN VỮNG",
+                "asset_type": "static_image",
+                "motion": "pan_left",
+                "ken_burns": "pan_left",
+                "sfx": "none",
+                "image_prompt": "Low-key heavy bleach-bypass artillery silhouette in charcoal black-and-white and near-monochrome shadows, 16:9 widescreen framing, no text",
+                "motion_prompt": "",
+            },
+        ],
+    }
+    sb_path = ep_dir / "storyboard.json"
+    sb_path.write_text(json.dumps(sb, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    reports, _, stats = validate_storyboard.validate_storyboard(sb_path)
+    total_errors = sum(len(r.errors) for r in reports)
+    assert total_errors == 0
+    assert stats["visual_preset"] == "restored_doc_still"
+
+    t5_warnings = reports[4].warnings
+    # Cảnh 2 bị cảnh báo nhẹ vì có "black and white" phẳng; Cảnh 1 (archive_sources.json), Cảnh 3 (allow_monochrome) và Cảnh 4 (cụm hybrid V5.7) được miễn
+    assert any("Cảnh 2:" in w and "restored_doc_still" in w for w in t5_warnings)
+    assert not any("Cảnh 1:" in w and "restored_doc_still" in w for w in t5_warnings)
+    assert not any("Cảnh 3:" in w and "restored_doc_still" in w for w in t5_warnings)
+    assert not any("Cảnh 4:" in w and "restored_doc_still" in w for w in t5_warnings)

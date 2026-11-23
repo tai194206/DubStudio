@@ -48,12 +48,31 @@ for _p in (str(REPO_ROOT), str(SCRIPTS_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from core.anti_ai_filter import (  # noqa: E402
+    DEFAULT_FLOW_WATERMARK_ZOOM,
+    crop_flow_watermark,
+    is_archival_scene,
+    load_archival_scene_ids,
+)
+from core.config import (  # noqa: E402
+    DEFAULT_VISUAL_PRESET,
+    VALID_VISUAL_PRESETS,
+    DubSettings,
+)
 from core.frame_presets import (  # noqa: E402
     DEFAULT_FRAME_PRESET,
     VALID_FRAME_PRESETS,
     FramePreset,
     get_frame_preset,
     resolve_frame_preset,
+)
+from core.house_look import (  # noqa: E402
+    DEFAULT_HOUSE_LOOK_STRENGTH,
+    DEFAULT_TOP_ND_STRENGTH,
+    HouseLookProfile,
+    apply_house_look_to_image,
+    audit_image_against_house_look,
+    resolve_look_reference,
 )
 from validate_storyboard import (  # noqa: E402
     print_report,
@@ -171,6 +190,7 @@ def _update_scene_state(
     image_status: Optional[str] = None,
     video_status: Optional[str] = None,
     error: Optional[str] = None,
+    house_look_applied: Optional[bool] = None,
 ) -> None:
     for item in state.get("scenes", []):
         if isinstance(item, dict) and item.get("id") == scene_id:
@@ -180,6 +200,8 @@ def _update_scene_state(
                 item["video_status"] = video_status
             if error is not None:
                 item["error"] = error
+            if house_look_applied is not None:
+                item["house_look_applied"] = bool(house_look_applied)
             return
 
 
@@ -301,6 +323,29 @@ def adapt_prompt_for_frame_preset(
     return f"{cleaned}, {WIDESCREEN_16_9_CUE}" if cleaned else WIDESCREEN_16_9_CUE
 
 
+RESTORED_DOC_DAYLIGHT_SUFFIX = (
+    "low-key dark archival documentary still with heavy silver-halide bleach-bypass look, "
+    "unified cold slate-charcoal near-monochrome shadows across uniforms, stone, foliage, skin and mud, "
+    "heavy smoke-darkened overcast sky with cool desaturated slate-blue atmospheric mist, no bright white sky, "
+    "natural ambient low-key light ONLY (warmth allowed ONLY from real sunlight shafts or practical flame, "
+    "NEVER selective yellow tint painted onto props or gear), strictly dark moody underexposed contrast, "
+    "NO bright full color, NO vivid green foliage, NO rosy skin tones, "
+    "coarse tactile 35mm Tri-X analog film grain and subtle archival micro-scratches, raw gritty war-correspondent photography, "
+    "edge-to-edge full-bleed, no borders, no text, no letters, no watermark"
+)
+
+RESTORED_DOC_NIGHT_BATTLE_SUFFIX = (
+    "low-key dark archival war-correspondent documentary still with heavy bleach-bypass look, "
+    "unified deep dark slate-charcoal near-monochrome shadows across trench mud, uniforms and foreground, "
+    "heavy smoke-darkened overcast sky with desaturated cold slate-blue pre-dawn mist in the background, no bright white sky, "
+    "contrasted ONLY by tiny distant warm artillery muzzle glow or restrained practical firelight "
+    "(and muted weathered crimson accent only if present), "
+    "strictly dark underexposed moody contrast, NO bright colorful tones, NO planted torches unless explicitly requested, "
+    "coarse 35mm analog film grain and subtle archival micro-scratches, raw gritty field photography, "
+    "edge-to-edge full-bleed, no borders, no text, no letters, no watermark"
+)
+
+# Gỡ sạch phong cách minh họa 2D/CGI, HDR rực, ép đen trắng phẳng/viền giả cổ (giữ nguyên cụm hybrid V5.7 như bleach-bypass / near-monochrome / charcoal black-and-white)
 _ARCHIVAL_STRIP_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"\bcinematic\s+historical\s+documentary\s+2d\s+semi-realistic\s+painted\s+illustration\b", re.I),
     re.compile(r"\b2d\s+semi-realistic\s+painted\s+illustration\b", re.I),
@@ -323,73 +368,132 @@ _ARCHIVAL_STRIP_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:teal[\s-]+and[\s-]+orange|orange[\s-]+and[\s-]+teal)\b", re.I),
     re.compile(r"\bcinematic\s+bokeh\b", re.I),
     re.compile(r"\b(?:2d\s+illustration|2d\s+animation|cel-shading|painted\s+illustration|digital\s+painting)\b", re.I),
-    re.compile(r"\b(?:cinematic\s+hdr|hyper-realistic|glossy|orange\s+and\s+teal|8k|muted\s+film\s+tones|atmospheric\s+depth)\b", re.I),
+    re.compile(r"\b(?:cinematic\s+hdr|hyper-realistic|glossy(?:\s+cgi)?|orange\s+and\s+teal|8k)\b", re.I),
+    # Cấm ép đen trắng phẳng & viền giấy/khung scan giả cũ (KHÔNG xóa cụm hybrid charcoal black-and-white / near-monochrome / bleach-bypass)
+    re.compile(r"(?<!charcoal )(?:\bpure\s+flat\s+)?\bblack\s*(?:&|and|-)\s*white\b", re.I),
+    re.compile(r"\bb\s*&\s*w\b", re.I),
+    re.compile(r"(?<!near-)(?<!near )\b(?:raw\s+35mm\s+)?monochrome(?:\s+film\s+grain)?\b", re.I),
+    re.compile(r"\bgr[ae]yscale\b", re.I),
+    re.compile(r"\bwarm\s+sepia(?:\s+tone(?:d)?)?\b", re.I),
+    re.compile(r"\bsepia(?:\s+tone(?:d)?)?\b", re.I),
+    re.compile(r"\byellowed\s+paper\s+borders?\b", re.I),
+    re.compile(r"\bvintage\s+frames?\b", re.I),
+    re.compile(r"\bfake\s+scan\s+frames?\b", re.I),
+    re.compile(r"\bphoto\s+borders?\b", re.I),
+    re.compile(r"\bdeckled\s+edges?\b", re.I),
+    re.compile(r"\b(?:blurry|low[\s-]+res(?:olution)?)\b", re.I),
+)
+_RESTORED_DOC_STRIP_PATTERNS = _ARCHIVAL_STRIP_PATTERNS
+
+_TRAILING_BOILERPLATE_PATTERNS: Tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bedge-to-edge\s+full-bleed\b", re.I),
+    re.compile(r"\bno\s+(?:white\s+|scan\s+)?borders?\b", re.I),
+    re.compile(r"\bno\s+readable\s+letters?\b", re.I),
+    re.compile(r"\bno\s+letters?\b", re.I),
+    re.compile(r"\bno\s+watermarks?\b", re.I),
+    re.compile(r"\bno\s+text\b", re.I),
 )
 
-_NIGHT_SCENE_RE = re.compile(r"\b(night|twilight|torch|torches|lantern|nocturnal|starry)\b", re.I)
+_DAYLIGHT_SCENE_RE = re.compile(
+    r"\b(morning|daylight|sunlight|midday|noon|afternoon|overcast)\b",
+    re.I,
+)
+_EXPLICIT_NIGHT_RE = re.compile(
+    r"\b(night|midnight|nocturnal|pre-dawn|predawn|dusk|twilight|starry)\b",
+    re.I,
+)
+_NIGHT_SCENE_RE = re.compile(
+    r"\b(night|pre-dawn|predawn|dawn|dusk|twilight|torch|torchlight|torches|"
+    r"lantern|firelight|campfire|muzzle|flare|battle|combat|artillery\s+fire|"
+    r"barrage|ambush|nocturnal|starry)\b",
+    re.I,
+)
 
 
-def adapt_prompt_for_archival_photo(
+def detect_scene_lighting_mood(
+    prompt: str,
+    scene_data: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Xác định biến thể ánh sáng V5.7 (`night_battle` hoặc `daylight`) theo ngữ cảnh cảnh quay."""
+    if isinstance(scene_data, dict):
+        explicit = str(scene_data.get("mood") or scene_data.get("lighting_mood") or "").strip().lower()
+        if explicit in ("night", "dusk", "dawn", "battle", "combat", "night_battle", "night/dawn/combat"):
+            return "night_battle"
+        if explicit in ("daylight", "day", "interior", "bunker", "daylight_interior"):
+            return "daylight"
+    text = prompt or ""
+    if _DAYLIGHT_SCENE_RE.search(text) and not _EXPLICIT_NIGHT_RE.search(text):
+        return "daylight"
+    if _NIGHT_SCENE_RE.search(text):
+        return "night_battle"
+    return "daylight"
+
+
+def adapt_prompt_for_restored_doc_still(
     prompt: str,
     *,
-    era_cue: str = "1954 Indochina",
+    scene_data: Optional[Dict[str, Any]] = None,
+    era_cue: str = "",
 ) -> str:
-    """Ép prompt gửi lên Flow về chuẩn ảnh phóng sự chiến trường V5.4 phục dựng sắc nét, gai góc, có chiều sâu."""
+    """Tiêm chuẩn toàn hệ thống V5.7 Dark Hybrid Archival `restored_doc_still` (era-agnostic, bleach-bypass tối + điểm màu chọn lọc)."""
     if not (prompt or "").strip():
         return prompt
 
     cleaned = str(prompt)
     for pat in _ARCHIVAL_STRIP_PATTERNS:
         cleaned = pat.sub("", cleaned)
+    for pat in _TRAILING_BOILERPLATE_PATTERNS:
+        cleaned = pat.sub("", cleaned)
 
     cleaned = re.sub(r"\s*,\s*(?:,\s*)+", ", ", cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
     cleaned = cleaned.strip(" ,\t\r\n")
 
-    if _NIGHT_SCENE_RE.search(cleaned):
-        archival_cue = (
-            f"authentic {era_cue} archival documentary night photograph, "
-            "cleanly restored archival documentary war-correspondent photography, "
-            "high-ISO raw 35mm monochrome / near-monochrome film grain, "
-            "stark authentic natural lighting, deep gritty texture, "
-            "crisp sharp historical detail of terrain, uniforms, smoke, fire and natural dim torchlight contrast, "
-            "candid documentary framing, borderless edge-to-edge full-bleed frame, "
-            "no modern cinematic color grading, no golden hour glow, no teal-and-orange, "
-            "no glossy AI sheen, no fake scan frame, no photo border, no deckled edge, "
-            "no pillarbox, no letterbox, no 2D illustration, no digital painting, no glossy HDR"
-        )
-    else:
-        archival_cue = (
-            f"authentic {era_cue} archival documentary photograph, "
-            "cleanly restored archival documentary war-correspondent photography, "
-            "raw 35mm monochrome / near-monochrome film grain, "
-            "stark authentic natural lighting, deep gritty texture, "
-            "crisp sharp historical detail of terrain, uniforms, smoke and natural overcast daylight, "
-            "candid documentary framing, borderless edge-to-edge full-bleed frame, "
-            "no modern cinematic color grading, no golden hour glow, no teal-and-orange, "
-            "no glossy AI sheen, no fake scan frame, no photo border, no deckled edge, "
-            "no pillarbox, no letterbox, no 2D illustration, no digital painting, no glossy HDR"
-        )
+    era_norm = (era_cue or "").strip()
+    if era_norm and era_norm.lower() not in cleaned.lower():
+        cleaned = f"{cleaned}, {era_norm}" if cleaned else era_norm
 
-    m_notext = re.search(r",?\s*\bno\s+text\b", cleaned, flags=re.I)
-    if m_notext:
-        head = cleaned[: m_notext.start()].rstrip(" ,")
-        tail = cleaned[m_notext.start() :].lstrip(" ,")
-        return f"{head}, {archival_cue}, {tail}" if head else f"{archival_cue}, {tail}"
-    return f"{cleaned}, {archival_cue}" if cleaned else archival_cue
+    mood = detect_scene_lighting_mood(cleaned, scene_data=scene_data)
+    suffix = RESTORED_DOC_NIGHT_BATTLE_SUFFIX if mood == "night_battle" else RESTORED_DOC_DAYLIGHT_SUFFIX
+    return f"{cleaned}, {suffix}" if cleaned else suffix
+
+
+def adapt_prompt_for_archival_photo(
+    prompt: str,
+    *,
+    era_cue: str = "",
+    scene_data: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Alias tương thích ngược cho V5.7 Dark Hybrid Archival `adapt_prompt_for_restored_doc_still` (era-agnostic)."""
+    return adapt_prompt_for_restored_doc_still(prompt, scene_data=scene_data, era_cue=era_cue)
 
 
 def should_apply_archival_photo(
     scene_data: Optional[Dict[str, Any]],
     *,
     global_archival_photo: bool = True,
+    storyboard_visual_preset: Optional[str] = None,
 ) -> bool:
-    """Xác định có áp bộ lọc V5.4 cho cảnh hay không (hỗ trợ ghi đè `\"archival_photo\": false` ở từng cảnh)."""
+    """Xác định có áp chuẩn V5.7 Dark Hybrid Archival `restored_doc_still` cho cảnh hay không.
+
+    Tôn trọng tắt toàn cục (`--no-archival-photo` / `--visual-preset raw`), `storyboard.visual_preset=="raw"`,
+    và ghi đè theo từng cảnh (`"archival_photo": false`, `"restored_doc_still": false`, `"visual_preset": "raw"|"diagram"`).
+    """
     if not global_archival_photo:
         return False
-    if isinstance(scene_data, dict) and scene_data.get("archival_photo") is False:
+    sb_vp = str(storyboard_visual_preset or "").strip().lower()
+    if sb_vp in ("raw", "off", "none"):
         return False
+    if isinstance(scene_data, dict):
+        if scene_data.get("archival_photo") is False or scene_data.get("restored_doc_still") is False:
+            return False
+        sc_vp = str(scene_data.get("visual_preset") or "").strip().lower()
+        if sc_vp in ("raw", "off", "none", "diagram"):
+            return False
     return True
+
+
+should_apply_restored_doc_still = should_apply_archival_photo
 
 
 def prepare_image_prompt_for_scene(
@@ -399,12 +503,19 @@ def prepare_image_prompt_for_scene(
     archival_photo: bool = True,
     aspect_plan: Optional[Dict[str, Any]] = None,
     selected_ui_aspect: Optional[str] = None,
+    visual_preset: Optional[str] = None,
+    storyboard_data: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Chuẩn bị prompt gửi lên Google Flow cho 1 cảnh (khung hình + chuẩn V5.4 nếu không bị tắt)."""
+    """Chuẩn bị prompt gửi lên Google Flow cho 1 cảnh (khung hình + V5.7 Dark Hybrid `restored_doc_still` nếu không bị tắt)."""
     raw_prompt = str((scene_data or {}).get("image_prompt", "")).strip()
     adapted = adapt_prompt_for_frame_preset(raw_prompt, frame_preset)
-    if should_apply_archival_photo(scene_data, global_archival_photo=archival_photo):
-        adapted = adapt_prompt_for_archival_photo(adapted)
+    sb_vp = visual_preset or ((storyboard_data or {}).get("visual_preset") if isinstance(storyboard_data, dict) else None)
+    if should_apply_archival_photo(
+        scene_data,
+        global_archival_photo=archival_photo,
+        storyboard_visual_preset=sb_vp,
+    ):
+        adapted = adapt_prompt_for_restored_doc_still(adapted, scene_data=scene_data)
     if aspect_plan is not None:
         return _augment_prompt_for_flow_aspect(adapted, aspect_plan, selected_ui_aspect)
     return adapted
@@ -553,6 +664,56 @@ def _convert_png_to_jpg(
         fitted = ImageOps.fit(rgb, target_size, method=Image.Resampling.LANCZOS, centering=centering)
         fitted.save(dst_jpg, format="JPEG", quality=95, subsampling=0)
         return fitted.size
+
+
+def process_flow_downloaded_image(
+    dl_path: Path,
+    raw_png: Path,
+    dst_jpg: Optional[Path] = None,
+    *,
+    frame_preset: Union[str, FramePreset] = DEFAULT_FRAME_PRESET,
+    scene_id: Optional[int] = None,
+    archival_scene_ids: Optional[Set[int]] = None,
+    strip_flow_watermark: bool = True,
+    zoom_factor: float = DEFAULT_FLOW_WATERMARK_ZOOM,
+    apply_house_look: bool = False,
+    look_profile: Optional[HouseLookProfile] = None,
+    house_look_strength: float = DEFAULT_HOUSE_LOOK_STRENGTH,
+    top_nd_strength: float = DEFAULT_TOP_ND_STRENGTH,
+    unify_grain: bool = True,
+) -> Tuple[int, int]:
+    """Xử lý ảnh AI mới tải từ Google Flow: auto-crop zoom 1.04x xóa watermark góc phải dưới,
+    áp House Look V5.8 (khớp màu LAB mềm + ND trời + hạt phim 35mm nếu bật), lưu PNG + JPG.
+
+    Bảo vệ nghiêm ngặt: nếu `scene_id` thuộc `archive_sources.json` (`archival_scene_ids`),
+    tuyệt đối KHÔNG crop hay chỉnh sửa.
+    """
+    from PIL import Image, ImageOps
+
+    raw_png.parent.mkdir(parents=True, exist_ok=True)
+    is_arch = is_archival_scene(scene_id, archival_scene_ids)
+    with Image.open(dl_path) as img:
+        rgb = ImageOps.exif_transpose(img).convert("RGB")
+        if not is_arch:
+            if strip_flow_watermark:
+                rgb = crop_flow_watermark(rgb, zoom_factor=float(zoom_factor))
+            if apply_house_look:
+                rgb = apply_house_look_to_image(
+                    rgb,
+                    profile=look_profile,
+                    strength=float(house_look_strength),
+                    top_nd_strength=float(top_nd_strength),
+                    unify_grain=bool(unify_grain),
+                    seed=f"scene_{scene_id}" if scene_id is not None else dl_path.name,
+                )
+        rgb.save(raw_png, format="PNG")
+
+    if not _file_ok(raw_png, MIN_IMAGE_BYTES):
+        raise RuntimeError(f"Ảnh tải về quá nhỏ (<10KB): {raw_png}")
+
+    if dst_jpg is not None:
+        return _convert_png_to_jpg(raw_png, dst_jpg, frame_preset=frame_preset)
+    return rgb.size
 
 
 def _strip_audio_ffmpeg(tmp_mp4: Path, dst_mp4: Path) -> None:
@@ -2351,6 +2512,7 @@ def run_images_mode(
     raw_dir: Optional[Path] = None,
     state_path: Optional[Path] = None,
     archival_photo: bool = True,
+    visual_preset: Optional[str] = None,
 ) -> int:
     """Chế độ --mode images: gen toàn bộ ảnh gốc (0 tín dụng) theo từng đợt song song + xuất JPG đúng frame_preset."""
     ep_dir = storyboard_path.parent
@@ -2362,6 +2524,34 @@ def run_images_mode(
     state = _load_full_pipeline_state(eff_state, data)
     eff_fp = resolve_frame_preset(override=frame_preset, storyboard_preset=data.get("frame_preset"))
     aspect_plan = resolve_flow_aspect_plan(eff_fp, mode="images")
+
+    dub_settings = DubSettings.load()
+    eff_visual_preset = (
+        visual_preset
+        or (data.get("visual_preset") if isinstance(data, dict) else None)
+        or getattr(dub_settings, "story_visual_preset", DEFAULT_VISUAL_PRESET)
+        or DEFAULT_VISUAL_PRESET
+    )
+    eff_archival = bool(archival_photo) and (str(eff_visual_preset).strip().lower() != "raw")
+    archival_ids = load_archival_scene_ids(ep_dir) | load_archival_scene_ids(eff_assets)
+    wm_crop_enabled = bool(getattr(dub_settings, "story_flow_watermark_crop", True))
+    wm_zoom = float(getattr(dub_settings, "story_flow_watermark_zoom", DEFAULT_FLOW_WATERMARK_ZOOM) or DEFAULT_FLOW_WATERMARK_ZOOM)
+    house_look_enabled = bool(getattr(dub_settings, "story_house_look_enabled", True)) and eff_archival
+    house_look_strength = float(getattr(dub_settings, "story_house_look_strength", DEFAULT_HOUSE_LOOK_STRENGTH) or DEFAULT_HOUSE_LOOK_STRENGTH)
+    top_nd_strength = float(getattr(dub_settings, "story_top_nd_strength", DEFAULT_TOP_ND_STRENGTH) or DEFAULT_TOP_ND_STRENGTH)
+    project_look_profile: Optional[HouseLookProfile] = None
+    if house_look_enabled:
+        project_look_profile = resolve_look_reference(data, ep_dir, assets_dir=eff_assets)
+        if project_look_profile is None:
+            house_look_enabled = False
+            print("[HOUSE LOOK V5.8] Đã tắt theo 'look_reference' trong storyboard.json.", flush=True)
+        else:
+            print(
+                f"[HOUSE LOOK V5.8] Ref='{project_look_profile.source or 'default'}' | "
+                f"strength={house_look_strength:.2f} | top_nd={top_nd_strength:.2f} | "
+                f"target(L={project_look_profile.luma_mean:.1f}, b={project_look_profile.b_mean:+.1f}, topL={project_look_profile.top_sky_luma:.1f})",
+                flush=True,
+            )
 
     # Bước A: Đồng bộ pipeline_state cho các cảnh đã có sẵn thành phẩm trong assets đích
     state_dirty = False
@@ -2450,9 +2640,11 @@ def run_images_mode(
                     prompt = prepare_image_prompt_for_scene(
                         sc,
                         eff_fp,
-                        archival_photo=archival_photo,
+                        archival_photo=eff_archival,
                         aspect_plan=aspect_plan,
                         selected_ui_aspect=selected_ui_aspect,
+                        visual_preset=eff_visual_preset,
+                        storyboard_data=data,
                     )
 
                     cur_txt = _get_visible_body_text(page)
@@ -2562,23 +2754,67 @@ def run_images_mode(
                             is_video=False,
                             fallback_aria=str(tile.get("aria_label") or ""),
                         )
-                        _convert_image_to_png(dl_path, raw_png)
+                        scene_apply_house_look = (
+                            house_look_enabled
+                            and (not is_archival_scene(sid, archival_ids))
+                            and should_apply_archival_photo(
+                                item.scene_data,
+                                global_archival_photo=eff_archival,
+                                storyboard_visual_preset=eff_visual_preset,
+                            )
+                        )
+                        out_w, out_h = process_flow_downloaded_image(
+                            dl_path,
+                            raw_png,
+                            dst_jpg=dst_jpg if asset_type == "static_image" else None,
+                            frame_preset=eff_fp.name,
+                            scene_id=sid,
+                            archival_scene_ids=archival_ids,
+                            strip_flow_watermark=wm_crop_enabled,
+                            zoom_factor=wm_zoom,
+                            apply_house_look=scene_apply_house_look,
+                            look_profile=project_look_profile,
+                            house_look_strength=house_look_strength,
+                            top_nd_strength=top_nd_strength,
+                            unify_grain=True,
+                        )
                         if tmp_img.is_file():
                             tmp_img.unlink(missing_ok=True)
-                        if not _file_ok(raw_png, MIN_IMAGE_BYTES):
-                            raise RuntimeError(f"Ảnh tải về quá nhỏ (<10KB): {raw_png}")
 
                         if asset_type == "static_image":
-                            out_w, out_h = _convert_png_to_jpg(raw_png, dst_jpg, frame_preset=eff_fp.name)
-                            _update_scene_state(state, sid, image_status="done", video_status="skipped", error="")
+                            _update_scene_state(
+                                state,
+                                sid,
+                                image_status="done",
+                                video_status="skipped",
+                                error="",
+                                house_look_applied=bool(scene_apply_house_look),
+                            )
                             print(
                                 f"  ✓ Cảnh {sid:03d}: Đã lưu {eff_raw.name}/{sid:03d}.png + "
                                 f"{eff_assets.name}/{sid:03d}.jpg ({out_w}x{out_h})",
                                 flush=True,
                             )
                         else:
-                            _update_scene_state(state, sid, image_status="done", error="")
+                            _update_scene_state(
+                                state,
+                                sid,
+                                image_status="done",
+                                error="",
+                                house_look_applied=bool(scene_apply_house_look),
+                            )
                             print(f"  ✓ Cảnh {sid:03d}: Đã lưu {eff_raw.name}/{sid:03d}.png", flush=True)
+                        if scene_apply_house_look:
+                            audit_target = dst_jpg if (asset_type == "static_image" and dst_jpg.is_file()) else raw_png
+                            audit = audit_image_against_house_look(audit_target, profile=project_look_profile)
+                            status_lbl = "PASS" if audit.passed else "⚠️ FLAG_REGEN"
+                            flag_note = f" | Lệch: {'; '.join(audit.flags)}" if audit.flags else ""
+                            print(
+                                f"    [LOOK QC] Cảnh {sid:03d}: {audit.consistency_score:.1f}/100 ({status_lbl}) "
+                                f"| L={audit.luma_mean:.1f} b={audit.b_mean:+.1f} topL={audit.top_sky_luma:.1f} "
+                                f"cool={audit.cool_index:+.1f}{flag_note}",
+                                flush=True,
+                            )
                         _save_pipeline_state_atomic(eff_state, state)
                     except Exception as exc:
                         failed_count += 1
@@ -2986,13 +3222,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         dest="archival_photo",
         action="store_true",
         default=True,
-        help="Mặc định BẬT (V5.4): ép prompt gửi lên Flow về chất ảnh phóng sự chiến trường phục dựng sắc nét (dùng --no-archival-photo để tắt).",
+        help="Mặc định BẬT (V5.6 restored_doc_still): áp chuẩn ảnh tư liệu phục dựng sắc nét có màu trầm & ánh sáng chọn lọc (dùng --no-archival-photo hoặc --visual-preset raw để tắt).",
     )
     parser.add_argument(
         "--no-archival-photo",
         dest="archival_photo",
         action="store_false",
-        help="Tắt bộ lọc ảnh phóng sự tư liệu V5.4 toàn cục (giữ nguyên prompt gốc trong storyboard).",
+        help="Tắt bộ lọc ảnh tư liệu phục dựng V5.6 toàn cục (giữ nguyên prompt gốc trong storyboard).",
+    )
+    parser.add_argument(
+        "--visual-preset",
+        choices=VALID_VISUAL_PRESETS,
+        default=None,
+        help="Chọn preset hình ảnh toàn cục (mặc định: restored_doc_still; chọn 'raw' để tắt tiêm hậu tố V5.6).",
     )
     return parser
 
@@ -3108,7 +3350,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 assets_dir=eff_assets,
                 raw_dir=eff_raw,
                 state_path=eff_state,
-                archival_photo=bool(args.archival_photo),
+                archival_photo=bool(args.archival_photo) and (args.visual_preset != "raw"),
+                visual_preset=args.visual_preset,
             )
         return run_videos_mode(
             storyboard_path,

@@ -1,0 +1,12 @@
+{
+  "luma_mean": 33.6971,
+  "luma_std": 24.382,
+  "a_mean": -2.2179,
+  "a_std": 1.5344,
+  "b_mean": -6.4791,
+  "b_std": 4.1097,
+  "top_sky_luma": 56.8436,
+  "sat_mean": 6.9625,
+  "cool_index": 21.0367,
+  "source": "008_v57.jpg"
+}

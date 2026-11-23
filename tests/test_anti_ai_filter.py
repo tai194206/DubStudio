@@ -9,10 +9,13 @@ import pytest
 from PIL import Image
 
 from core.anti_ai_filter import (
+    DEFAULT_FLOW_WATERMARK_ZOOM,
     build_ai_scene_depolish_vf,
     build_anti_ai_audio_filters,
     build_anti_ai_video_filters,
+    crop_flow_watermark,
     get_clean_metadata_flags,
+    is_archival_scene,
     load_archival_scene_ids,
     normalize_anti_ai_level,
     probe_video_details,
@@ -274,9 +277,12 @@ def test_story_pipeline_anti_ai_before_ass_and_bool_backward_compat(tmp_path, mo
     )
     assert out_med.is_file()
     vf_med = _find_vf("clip_001.mp4")
-    assert "eq=saturation=0.95" in vf_med
-    assert "curves=all='0/0 0.5/0.5 0.85/0.77 1/0.88'" in vf_med
-    assert "noise=alls=6:allf=t+u" in vf_med
+    assert "hqdn3d=0.8:0.6:1.5:1.2" in vf_med
+    assert "eq=saturation=0.52" in vf_med
+    assert "curves=all='0/0 0.25/0.20 0.5/0.45 0.85/0.82 1/0.95'" in vf_med
+    assert "colorbalance=rs=-0.04:gs=0.00:bs=0.06:rm=-0.03:gm=0.00:bm=0.05:rh=0.02:gh=0.01:bh=-0.01" in vf_med
+    assert "noise=alls=7:allf=t+u" in vf_med
+    assert "vignette=PI/6" in vf_med
     assert "crop=1080:1920:" in vf_med
     assert "unsharp" not in vf_med
 
@@ -293,8 +299,11 @@ def test_story_pipeline_anti_ai_before_ass_and_bool_backward_compat(tmp_path, mo
     pipe2.render_story(sb, assets_dir=assets_dir, output_path=out_bool_true, burn_subtitles=True, anti_ai=True)
     assert out_bool_true.is_file()
     vf_true = _find_vf("clip_001.mp4")
-    assert "eq=saturation=0.95" in vf_true
-    assert "curves=" in vf_true
+    assert "hqdn3d=0.8:0.6:1.5:1.2" in vf_true
+    assert "eq=saturation=0.52" in vf_true
+    assert "colorbalance=rs=-0.04:gs=0.00:bs=0.06" in vf_true
+    assert "curves=all='0/0 0.25/0.20 0.5/0.45 0.85/0.82 1/0.95'" in vf_true
+    assert "vignette=PI/6" in vf_true
     cmd_true, fc_true = _find_mix("story_bool_true.mp4")
     assert "ass=subs.ass" in fc_true
     assert "rotate=" not in fc_true
@@ -311,6 +320,8 @@ def test_story_pipeline_anti_ai_before_ass_and_bool_backward_compat(tmp_path, mo
     assert "curves=" not in vf_false
     assert "eq=saturation=" not in vf_false
     assert "noise=" not in vf_false
+    assert "vignette=" not in vf_false
+    assert "hqdn3d=" not in vf_false
     cmd_false, fc_false = _find_mix("story_bool_false.mp4")
     assert "rotate=" not in fc_false
     assert "anoisesrc=" not in fc_false
@@ -359,29 +370,84 @@ def test_load_archival_scene_ids(tmp_path):
 
 
 def test_ai_scene_depolish_vf_spec():
-    """Kiểm tra thông số khử bóng HDR cho cảnh AI (có saturation, curves, noise, scale+crop; KHÔNG có unsharp)."""
+    """Kiểm tra thông số House Look V5.8 cho cảnh AI (hqdn3d nhẹ, slate colorbalance, curves, vignette, KHÔNG unsharp) & hòa tông ~15% cho ảnh tư liệu thật."""
+    from core.anti_ai_filter import ARCHIVAL_HARMONIZE_VF, build_archival_harmonize_vf
+
     assert build_ai_scene_depolish_vf("off") == ""
+    assert build_archival_harmonize_vf(False) == ""
+    harm = build_archival_harmonize_vf(True)
+    assert harm == ARCHIVAL_HARMONIZE_VF
+    assert "eq=contrast=1.04:brightness=-0.02" in harm
+    assert "colorbalance=rs=-0.018:gs=0.00:bs=0.026" in harm
+    assert "curves=" not in harm and "noise=" not in harm and "crop=" not in harm
 
     vf_light = build_ai_scene_depolish_vf("light", width=1080, height=1920)
-    assert "eq=saturation=0.95" in vf_light
-    assert "curves=all='0/0 0.5/0.5 0.85/0.80 1/0.92'" in vf_light
-    assert "noise=alls=4:allf=t+u" in vf_light
+    assert "hqdn3d=0.6:0.5:1.2:1.0" in vf_light
+    assert "eq=saturation=0.62" in vf_light
+    assert "curves=all='0/0 0.25/0.22 0.5/0.47 0.85/0.84 1/0.96'" in vf_light
+    assert "colorbalance=rs=-0.03:gs=0.00:bs=0.045:rm=-0.025:gm=0.00:bm=0.04:rh=0.015:gh=0.005:bh=-0.01" in vf_light
+    assert "noise=alls=5:allf=t+u" in vf_light
+    assert "vignette=PI/7" in vf_light
     assert "scale=1114:1978:flags=lanczos" in vf_light
     assert "crop=1080:1920:" in vf_light
     assert "unsharp" not in vf_light
 
     vf_med = build_ai_scene_depolish_vf("medium", width=1080, height=1920)
-    assert "eq=saturation=0.95" in vf_med
-    assert "curves=all='0/0 0.5/0.5 0.85/0.77 1/0.88'" in vf_med
-    assert "noise=alls=6:allf=t+u" in vf_med
+    assert "hqdn3d=0.8:0.6:1.5:1.2" in vf_med
+    assert "eq=saturation=0.52" in vf_med
+    assert "curves=all='0/0 0.25/0.20 0.5/0.45 0.85/0.82 1/0.95'" in vf_med
+    assert "colorbalance=rs=-0.04:gs=0.00:bs=0.06:rm=-0.03:gm=0.00:bm=0.05:rh=0.02:gh=0.01:bh=-0.01" in vf_med
+    assert "noise=alls=7:allf=t+u" in vf_med
+    assert "vignette=PI/6" in vf_med
     assert "scale=1114:1978:flags=lanczos" in vf_med
     assert "crop=1080:1920:" in vf_med
     assert "unsharp" not in vf_med
 
     vf_strong = build_ai_scene_depolish_vf("strong", width=1080, height=1920)
-    assert "eq=saturation=0.93" in vf_strong
-    assert "curves=all='0/0 0.5/0.5 0.85/0.74 1/0.85'" in vf_strong
-    assert "noise=alls=8:allf=t+u" in vf_strong
+    assert "hqdn3d=1.0:0.8:1.8:1.4" in vf_strong
+    assert "eq=saturation=0.44" in vf_strong
+    assert "curves=all='0/0 0.25/0.18 0.5/0.42 0.85/0.79 1/0.93'" in vf_strong
+    assert "colorbalance=rs=-0.05:gs=0.00:bs=0.075:rm=-0.035:gm=0.00:bm=0.06:rh=0.02:gh=0.01:bh=-0.01" in vf_strong
+    assert "noise=alls=9:allf=t+u" in vf_strong
+    assert "vignette=PI/5" in vf_strong
     assert "scale=1124:1998:flags=lanczos" in vf_strong
     assert "crop=1080:1920:" in vf_strong
     assert "unsharp" not in vf_strong
+
+
+def test_crop_flow_watermark_and_v56_settings_defaults(tmp_path):
+    """Kiểm chứng auto-crop 1.04x + xóa thoi góc phải dưới Flow và cấu hình mặc định V5.6 trong DubSettings."""
+    import numpy as np
+
+    assert DEFAULT_FLOW_WATERMARK_ZOOM == pytest.approx(1.04)
+    assert is_archival_scene(3, {1, 3, 5}) is True
+    assert is_archival_scene(4, {1, 3, 5}) is False
+    assert is_archival_scene(4, None) is False
+
+    # 1. Tạo ảnh mẫu 1024x576 tối sẫm có ngôi sao 4 cánh sáng ở góc phải dưới (x~93%, y~88%)
+    w, h = 1024, 576
+    arr = np.full((h, w, 3), 18, dtype=np.uint8)
+    cx, cy, r_star = int(w * 0.93), int(h * 0.88), 24
+    yy, xx = np.mgrid[0:h, 0:w]
+    d = np.power(np.abs(xx - cx) / r_star, 0.54) + np.power(np.abs(yy - cy) / r_star, 0.54)
+    arr[d <= 1.0] = (145, 145, 145)
+    src_img = Image.fromarray(arr, mode="RGB")
+
+    cropped = crop_flow_watermark(src_img, zoom_factor=1.04, remove_corner_sparkle=True)
+    assert cropped.size == (985, 554)
+    # Điểm tâm ngôi sao cũ phải được lấp về gần nền tối (~18), tuyệt đối không còn sáng > 50
+    clean_arr = np.asarray(cropped, dtype=np.uint8)
+    assert int(clean_arr[cy - 4 : cy + 5, cx - 4 : cx + 5].max()) < 50
+
+    # Tắt crop/clean trả nguyên kích thước & pixel gốc
+    untouched = crop_flow_watermark(src_img, zoom_factor=1.0, remove_corner_sparkle=False)
+    assert untouched.size == (1024, 576)
+    assert int(np.asarray(untouched)[cy, cx, 0]) == 145
+
+    # 2. DubSettings mặc định V5.6 + tương thích ngược file cũ
+    legacy_path = tmp_path / "legacy_settings.json"
+    legacy_path.write_text(json.dumps({"story_anti_ai": True}), encoding="utf-8")
+    loaded = DubSettings.load(legacy_path)
+    assert loaded.story_visual_preset == "restored_doc_still"
+    assert loaded.story_flow_watermark_crop is True
+    assert loaded.story_flow_watermark_zoom == pytest.approx(1.04)

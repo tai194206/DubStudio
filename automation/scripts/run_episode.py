@@ -28,6 +28,7 @@ REPO_ROOT = SCRIPTS_DIR.parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.config import DEFAULT_VISUAL_PRESET, VALID_VISUAL_PRESETS  # noqa: E402
 from core.frame_presets import (  # noqa: E402
     DEFAULT_FRAME_PRESET,
     VALID_FRAME_PRESETS,
@@ -405,6 +406,7 @@ def run_phase_images(
     assets_dir: Optional[Path] = None,
     raw_dir: Optional[Path] = None,
     archival_photo: bool = True,
+    visual_preset: Optional[str] = None,
 ) -> int:
     # Khi chạy --youtube-16x9: chỉ validate read-only để không chạm assets/ hay pipeline_state.json của TikTok
     use_sync = (not dry_run) and (not youtube_16x9) and (assets_dir is None) and (raw_dir is None)
@@ -413,15 +415,18 @@ def run_phase_images(
         print("\n[ABORT] Storyboard chưa PASS kiểm định. Không chạy phase images.")
         return rc_val
 
+    eff_archival = bool(archival_photo) and (str(visual_preset or "").strip().lower() != "raw")
     cmd = [sys.executable, str(FLOW_BOT_SCRIPT), str(storyboard_path), "--mode", "images"]
     if scenes_arg:
         cmd.extend(["--scenes", scenes_arg])
     if dry_run:
         cmd.append("--dry-run")
-    if archival_photo:
+    if eff_archival:
         cmd.append("--archival-photo")
     else:
         cmd.append("--no-archival-photo")
+    if visual_preset:
+        cmd.extend(["--visual-preset", str(visual_preset)])
     if cdp_url:
         cmd.extend(["--cdp-url", cdp_url])
     if concurrency is not None:
@@ -648,6 +653,7 @@ def run_phase_all(
     assets_dir: Optional[Path] = None,
     raw_dir: Optional[Path] = None,
     archival_photo: bool = True,
+    visual_preset: Optional[str] = None,
 ) -> int:
     rc_img = run_phase_images(
         ep_dir,
@@ -661,6 +667,7 @@ def run_phase_all(
         assets_dir=assets_dir,
         raw_dir=raw_dir,
         archival_photo=archival_photo,
+        visual_preset=visual_preset,
     )
     if rc_img == 2:
         return 2
@@ -802,13 +809,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         dest="archival_photo",
         action="store_true",
         default=True,
-        help="Mặc định BẬT (V5.4): ép prompt gửi sang Google Flow về chất ảnh phóng sự chiến trường phục dựng sắc nét (dùng --no-archival-photo để tắt).",
+        help="Mặc định BẬT (V5.6 restored_doc_still): áp chuẩn ảnh tư liệu phục dựng sắc nét có màu trầm & ánh sáng chọn lọc (dùng --no-archival-photo hoặc --visual-preset raw để tắt).",
     )
     parser.add_argument(
         "--no-archival-photo",
         dest="archival_photo",
         action="store_false",
-        help="Tắt bộ lọc ảnh phóng sự tư liệu V5.4 toàn cục (giữ nguyên prompt gốc).",
+        help="Tắt bộ lọc ảnh tư liệu phục dựng V5.6 toàn cục (giữ nguyên prompt gốc).",
+    )
+    parser.add_argument(
+        "--visual-preset",
+        choices=VALID_VISUAL_PRESETS,
+        default=None,
+        help=f"Chọn preset hình ảnh toàn cục (mặc định: {DEFAULT_VISUAL_PRESET}; chọn 'raw' để tắt tiêm hậu tố V5.6).",
     )
     return parser
 
@@ -850,7 +863,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             youtube_16x9=bool(args.youtube_16x9),
             assets_dir=args.assets_dir,
             raw_dir=args.raw_dir,
-            archival_photo=bool(args.archival_photo),
+            archival_photo=bool(args.archival_photo) and (args.visual_preset != "raw"),
+            visual_preset=args.visual_preset,
         )
 
     if args.phase == "videos":
@@ -882,7 +896,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         youtube_16x9=bool(args.youtube_16x9),
         assets_dir=args.assets_dir,
         raw_dir=args.raw_dir,
-        archival_photo=bool(args.archival_photo),
+        archival_photo=bool(args.archival_photo) and (args.visual_preset != "raw"),
+        visual_preset=args.visual_preset,
     )
 
 
